@@ -36,4 +36,44 @@ version 0.1.0, and import succeeds with no `ANTHROPIC_API_KEY` set (offline-firs
 
 ---
 
-<!-- Phase 1+ entries appended below as work proceeds. -->
+## Phase 1 — Data layer (synthetic, reproducible)  ✅
+**Built:**
+- `config.py` — the single source of truth: `ScorecardConfig` (frozen dataclass) holding the
+  seed, synthetic calendar, universe (10 `TickerSpec`s + benchmark `MKT`), horizon, direction
+  band, accuracy params. `ticker_seed()` derives a per-symbol RNG seed from `SHA-256(seed:symbol)`.
+- `schemas.py` — Pydantic v2 models: `Direction`, `Rating`, frozen `RATING_TO_DIRECTION` /
+  `DIRECTION_TO_POSITION` maps, `Call`, plus `Resolution`/`CallScore`/`AnalystScore`/`Leaderboard`
+  (defined now as the full contract; populated in later phases).
+- `providers/price_provider.py` — `PriceDataProvider` ABC + `SyntheticPriceDataProvider` (seeded
+  GBM, one independent RNG per symbol) + `PriceWindow` (the bounded [call,resolution] slice).
+- `providers/call_provider.py` — `AnalystCallProvider` ABC + `FixtureCallProvider` (strict JSON
+  load) + `InMemoryCallProvider`.
+- `synth.py` — generator for 8 ground-truth analysts (98 calls) written to `fixtures/calls.json`.
+
+**Test results:** `pytest` → **16 passed** (14 Phase-1 + 2 smoke). Confirms: prices deterministic
+under a fixed seed; different seed ⇒ different prices; per-ticker seed is order-independent; first
+day == start price; benchmark series exists and is separate; `trading_day_offset` counts trading
+days and refuses to run past the data; `PriceWindow` is bounded exactly and rejects future data;
+fixtures load+validate with all 8 analysts and all 5 rating types; bad calls are rejected.
+
+**Assumptions / decisions (scoring-relevant):**
+- **Calendar:** synthetic business days (`pd.bdate_range`, Mon–Fri, no holidays), 1008 days
+  (~4y) from 2021-01-04. "Trading day" = a business day in this index.
+- **Prices:** seeded GBM with annualized drift/vol per ticker; daily step `dt = 1/252`. First
+  day pinned to `start_price`. Benchmark `MKT` has positive drift (0.08) — a deliberately RISING
+  MARKET so the buy-only rider can look good on direction while adding no real value.
+- **Per-symbol independent RNG** (seed from `SHA-256(seed:symbol)`): adding/reordering tickers
+  never perturbs another ticker's path → robust reproducibility.
+- **Call price source of truth:** the resolver uses provider closes (full precision). A call's
+  `initial_price` is stored as the exact provider close on the call date (a faithful snapshot);
+  `target_price` is rounded to 2 d.p. (the analyst's stated number).
+- **WORLD-BUILDING vs SCORING:** `synth.py` peeks at the realized synthetic future to *construct*
+  analysts with known skill (e.g. the skilled picker gets longs that genuinely beat the index).
+  This is fixture construction only — it is NOT look-ahead in scoring. The scoring engine is only
+  ever handed a bounded window and is structurally blind to the future. Phase 4 verifies the blind
+  engine recovers the planted skill. Each call's resolution rule (horizon→deadline) is still fixed
+  at record time.
+
+**Limitations:** synthetic data only (by design); single benchmark; single 1-year horizon for all
+fixtures (engine supports per-call horizons; multi-horizon fixtures are a documented next step).
+
