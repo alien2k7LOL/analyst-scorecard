@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environment
+.venv/
+venv/
+
+# OS / editor
+.DS_Store
+*.swp
+
+# Secrets — never commit
+.env
+*.key
+
+# Claude Code machine-local settings (personal permissions, not project config)
+.claude/settings.local.json
+
+# Generated artifacts (charts regenerate deterministically; keep tree clean)
+outputs/*.png
+outputs/*.html
+!outputs/.gitkeep

@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "analyst-scorecard"
+version = "0.1.0"
+description = "Honest, fair, reproducible grading of Wall Street analyst price targets."
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["analyst_scorecard", "analyst_scorecard.providers"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-q"
+filterwarnings = [
+    # Keep the suite honest: surface our own deprecations, ignore noisy third-party ones.
+    "ignore::DeprecationWarning:pkg_resources.*",
+]
