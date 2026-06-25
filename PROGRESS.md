@@ -77,3 +77,32 @@ fixtures load+validate with all 8 analysts and all 5 rating types; bad calls are
 **Limitations:** synthetic data only (by design); single benchmark; single 1-year horizon for all
 fixtures (engine supports per-call horizons; multi-horizon fixtures are a documented next step).
 
+---
+
+## Phase 2 — Resolution engine (look-ahead-safe core)  ✅
+**Built:** `resolution.py` — `resolve_call(call, window)` computes, from a bounded window only:
+`call_price`, `actual_price`, `stock_return`, `benchmark_return`, `realized_horizon_vol`, and
+`n_observations` → a frozen `Resolution`. `resolve_call_with_provider(call, provider)` is the only
+bridge from a full provider to the resolver and slices strictly to the record-time resolution date.
+The resolver also asserts the window matches the call (ticker + both dates) so a misaligned/leaky
+window can never be silently scored.
+
+**Test results:** `pytest` → **25 passed** (9 Phase-2 added). Proofs:
+- **(a) behavioral:** multiplying EVERY post-resolution price by 1000 leaves the `Resolution`
+  byte-for-byte identical; mutating pre-call prices likewise. The future cannot enter the math.
+- **(b) structural:** a window extending past the resolution date is rejected ("LOOK-AHEAD
+  BLOCKED"); asking a window for a future price raises; the resolver refuses a window resolved on
+  a later date than the call's record-time deadline, and refuses a mismatched ticker.
+- every one of the 98 fixture calls resolves cleanly.
+
+**Assumptions / decisions (scoring-relevant):**
+- **Returns:** simple returns `P_res/P_call − 1` for both stock and benchmark, over [call,res].
+- **Realized horizon vol:** sample std (ddof=1) of daily LOG returns in the window × √(horizon
+  steps). This is the per-stock, per-horizon yardstick the accuracy stage divides by.
+- **Deadline is sacred:** scoring a call against any resolution date other than its record-time
+  `resolution_date` is treated as a look-ahead back door and raised, not silently allowed.
+
+**Limitations:** resolution assumes the resolution date is a trading day with data (true for all
+synthetic calls). A real provider needs an explicit "next trading day on/after" rule for holidays
+/ missing data — noted as a next step.
+
