@@ -214,3 +214,35 @@ fields of all 5 notes; extracted calls finalize into valid Calls and flow throug
 **Limitations:** offline extractor is rule-based and not meant for arbitrary real notes (that is
 the LLM path's job); the live-API accuracy is asserted only when a key is present.
 
+---
+
+## Phase 6 — End-to-end orchestration + the time-loop agent  ✅
+**Built:**
+- `orchestrator.py` — `TimeLoopOrchestrator` advances a SYNTHETIC CLOCK through trading time;
+  each call is resolved only when the clock reaches its record-time `resolution_date` (so at
+  resolution "now" == deadline → look-ahead is impossible even in the simulation), the
+  analyst's running score updates, and a one-line verdict is drafted
+  (e.g. `"… came due: MISSED on direction. Beat-market record now -7.6%."`). No human in the loop.
+  Returns `SimulationResult` (events, final per-analyst scores, leaderboard, clock range).
+- `cli.py` — `python -m analyst_scorecard.cli` runs the whole simulation, streams verdict lines
+  as deadlines arrive, then prints the beat-market-ranked leaderboard. Flags: `--seed`,
+  `--quiet`, `--max-events`.
+
+**Test results:** `pytest` → **67 passed, 1 skipped** (8 Phase-6 added). Confirms: the loop
+resolves every one of the 108 calls exactly once; synthetic time advances monotonically; each
+call is graded exactly at its deadline (`clock == resolution_date`); the **time-loop leaderboard
+is byte-equal to the batch leaderboard** (the streaming path and the batch path agree); running
+snapshots converge to the final scores; verdict lines have the expected shape; the loop is
+reproducible; the CLI prints the leaderboard with the skilled picker on top.
+
+**Assumptions / decisions:**
+- Event-driven simulation: calls are processed in `(resolution_date, call_id)` order. The clock
+  jumps to each deadline rather than ticking every calendar day — same outcome, and it keeps the
+  "resolve only at the deadline" guarantee explicit.
+- Running `beat_market` is recomputed from the analyst's accumulated scores after each
+  resolution (so the streamed record is always the true running mean over resolved directional
+  calls).
+
+**Limitations:** the simulation replays a fixed, fully-known synthetic price history; a live
+deployment would instead wake on real calendar dates as deadlines pass.
+
