@@ -264,3 +264,28 @@ the contrarian gets "…targets are wildly off". (Coinflip's honest "usually wro
 **Assumptions:** verdict thresholds (direction ≥0.70 / ≥0.55 / ≥0.45; beat ±0.02; accuracy
 ≥0.80 / <0.50) are fixed in one place and applied uniformly.
 
+---
+
+## Phase 7 — Visualization (Streamlit app + PNGs)  ✅
+**Built:**
+- `viz.py` (headless-safe matplotlib, importable/testable): `build_dashboard`,
+  `leaderboard_dataframe`, `call_detail_dataframe` (per-call EXACT resolving prices),
+  `plot_leaderboard` (beat-market bar), `plot_analyst_profile` (the headline chart), and
+  `save_dashboard_pngs` (writes `outputs/*.png`).
+- `app.py` — thin Streamlit app: (1) leaderboard ranked by beat-market with direction & accuracy
+  columns + bar chart; (2) per-analyst profile chart + plain-English verdict + metric tiles;
+  (3) call-level drill-down table showing the original call and the exact resolving prices.
+- The profile chart plots each directional call at (index return, return-from-following-the-call)
+  with a y=x "matches the index" line: **a skilled analyst (Vega) sits visibly ABOVE the line; the
+  rider (MomentumOne) sits BELOW it** — verified in the saved PNGs.
+
+**Test results:** `pytest` → **79 passed, 2 skipped** (7 Phase-7 added). Confirms: leaderboard df
+ranked with Vega on top; drill-down prices equal the provider's actual call/resolution-date prices
+(traceability); charts render; PNGs save non-empty; `app.py` compiles; and the **Streamlit app
+renders all three views with no exceptions** (via `streamlit.testing.v1.AppTest`). Also verified
+the app boots headless (HTTP 200, `/_stcore/health` → ok).
+
+**Assumptions:** the profile scatter axis auto-scales, so one large-outlier winner (e.g. a +275%
+call) can compress the rest of the cluster — honest but a future polish item (clip/symlog).
+PNGs are regenerated deterministically and are git-ignored.
+

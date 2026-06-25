@@ -18,4 +18,6 @@ addopts = "-q"
 filterwarnings = [
     # Keep the suite honest: surface our own deprecations, ignore noisy third-party ones.
     "ignore::DeprecationWarning:pkg_resources.*",
+    "ignore::DeprecationWarning:matplotlib.*",
+    "ignore::DeprecationWarning:pyparsing.*",
 ]
