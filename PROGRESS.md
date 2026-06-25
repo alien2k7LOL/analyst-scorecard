@@ -289,3 +289,37 @@ the app boots headless (HTTP 200, `/_stcore/health` → ok).
 call) can compress the rest of the cluster — honest but a future polish item (clip/symlog).
 PNGs are regenerated deterministically and are git-ignored.
 
+---
+
+## FINAL — README + closing state  ✅
+**Built:** the complete `README.md` — architecture/module map, quick start, the exact scoring
+definitions, the fairness rules (no-look-ahead guarantee, record-time deadlines, single
+benchmark, declared revision policy, partial-hit handling, reproducibility), how the synthetic
+ground truth is built (world-building vs scoring), how to run tests / CLI / app / LLM paths,
+current capabilities, honest limitations, and the prioritized next-steps list.
+
+**Final test state:** `pytest` → **79 passed, 2 skipped** (the 2 skips are the live-API extractor
+and verdict tests, which run only when `ANTHROPIC_API_KEY` is set). Fully offline, ~2s.
+
+**Phase status:** P0–P8 + final all complete and committed (one commit per phase). The engine
+builds and runs with no network and no API key; the CLI produces the correct leaderboard; the
+Streamlit app renders all three views; every fairness invariant is enforced in code and covered
+by a test that would fail if future data leaked or a rule were applied unevenly.
+
+### Consolidated scoring assumptions (the audit trail, one place)
+- Direction band `b = 0.02`; realized UP if `>b`, DOWN if `<−b`, else FLAT; boundary `±b` is FLAT.
+- Accuracy `= exp(−(|P_actual−P_target|/P_call)/(sigma_h·1.0))`, `sigma_h` = realized daily-log
+  vol × √(horizon days), floored at `1e-4`; bullseye = 1.0; `None` for direction failures.
+- Beat `= position·stock_return − benchmark_return` over directional calls (incl. losers);
+  Hold excluded; no borrow/financing cost; long/short symmetric.
+- Aggregates: hit-rate over ALL calls; mean accuracy over passers; beat = mean over directional
+  calls (averaged, not compounded). Leaderboard ranked by beat (None last).
+- Horizon: per-call trading days (fixtures use 252); deadline fixed at record time.
+- Benchmark: single index `MKT`, drift 0.08 (rising market). Seed 20240601.
+- Revision policy: revision closes the old call (own horizon) and opens a new one. Partial hits:
+  no special bucket; target need not be touched.
+- Ground truth is constructed by conditioning fixtures on the realized synthetic future
+  (world-building); scoring is structurally blind to the future.
+- Known limitation: beat is an outlier-sensitive point estimate at small call counts
+  (needs significance testing for real use).
+
