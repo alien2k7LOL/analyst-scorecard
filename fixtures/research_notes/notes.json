@@ -1,0 +1,67 @@
+[
+  {
+    "note_id": "note-001",
+    "text": "Firm: Goldsmith & Co.\nAnalyst: Dana Reyes\nDate: February 12, 2021\n---\nWe are initiating coverage of ASTR with a BUY rating. Momentum in the core franchise is accelerating and we think the Street is too conservative. Our 12-month price target of $95.00 implies meaningful upside from current levels.",
+    "expected": {
+      "analyst_name": "Dana Reyes",
+      "firm": "Goldsmith & Co.",
+      "ticker": "ASTR",
+      "rating": "Buy",
+      "target_price": 95.0,
+      "call_date": "2021-02-12",
+      "horizon_days": 252
+    }
+  },
+  {
+    "note_id": "note-002",
+    "text": "Firm: Harbor Point Securities\nAnalyst: Marcus Vale\nDate: March 3, 2021\n---\nFollowing a strong quarter and improving margins, we are upgrading EVRG to Overweight from Equal Weight. Our 6-month price objective moves to $102.50; we would be buyers on any pullback.",
+    "expected": {
+      "analyst_name": "Marcus Vale",
+      "firm": "Harbor Point Securities",
+      "ticker": "EVRG",
+      "rating": "Overweight",
+      "target_price": 102.5,
+      "call_date": "2021-03-03",
+      "horizon_days": 126
+    }
+  },
+  {
+    "note_id": "note-003",
+    "text": "Firm: Sterling Cross Research\nAnalyst: Priya Anand\nDate: April 20, 2021\n---\nWe are downgrading DRNE to a Sell. Deteriorating unit economics and a stretched balance sheet leave little room for error. Our 12-month target of $18.00 reflects further downside as estimates reset.",
+    "expected": {
+      "analyst_name": "Priya Anand",
+      "firm": "Sterling Cross Research",
+      "ticker": "DRNE",
+      "rating": "Sell",
+      "target_price": 18.0,
+      "call_date": "2021-04-20",
+      "horizon_days": 252
+    }
+  },
+  {
+    "note_id": "note-004",
+    "text": "Firm: Cobalt Lane Capital\nAnalyst: Tom Becker\nDate: June 1, 2021\n---\nWe maintain a Hold (Neutral) on HELX. The risk/reward looks balanced here after the recent run. Our near-term 3-month fair value estimate is $205.00; we'd look for a better entry point before adding.",
+    "expected": {
+      "analyst_name": "Tom Becker",
+      "firm": "Cobalt Lane Capital",
+      "ticker": "HELX",
+      "rating": "Hold",
+      "target_price": 205.0,
+      "call_date": "2021-06-01",
+      "horizon_days": 63
+    }
+  },
+  {
+    "note_id": "note-005",
+    "text": "Firm: Ridgeway Partners\nAnalyst: Lena Cho\nDate: July 15, 2021\n---\nWe initiate IONX at Underweight given valuation concerns and decelerating bookings. While the story is exciting, the multiple already discounts a lot. Our 6-month price target is $33.25.",
+    "expected": {
+      "analyst_name": "Lena Cho",
+      "firm": "Ridgeway Partners",
+      "ticker": "IONX",
+      "rating": "Underweight",
+      "target_price": 33.25,
+      "call_date": "2021-07-15",
+      "horizon_days": 126
+    }
+  }
+]

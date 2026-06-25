@@ -181,3 +181,36 @@ through the full funnel. All pass:
 future (world-building, documented in `synth.py`); validation shows the engine RECOVERS planted
 skill, not that real analysts behave this way.
 
+---
+
+## Phase 5 — Analyst-call extraction agent  ✅
+**Built:** `extraction.py` —
+- `ExtractedCall` (Pydantic) = the fields legible from a note; `CallExtractor` interface.
+- `LLMCallExtractor` — real Anthropic implementation using **structured JSON output**
+  (`client.messages.parse(..., output_format=ExtractedCall)`), model `claude-opus-4-8` (per
+  the Anthropic SDK skill guidance; override via `SCORECARD_EXTRACTION_MODEL`), key from
+  `ANTHROPIC_API_KEY`. Raises a clear error if no key (points to the offline path).
+- `HeuristicCallExtractor` — deterministic, offline, no-key regex/rule extractor (the default
+  for the harness so Phase 5 runs and passes with no network).
+- `finalize_extracted` — turns an `ExtractedCall` into a full look-ahead-safe `Call`: fixes
+  the resolution date at record time (call_date + horizon trading days) and reads the
+  call-date price from the provider, so extracted calls obey the same fairness contract.
+- `evaluate_extractor` accuracy harness + `load_research_notes`. 5 synthetic research notes
+  (`fixtures/research_notes/notes.json`) with ground-truth extractions covering all 5 ratings
+  and 3/6/12-month horizons.
+
+**Test results:** `pytest` → **58 passed, 1 skipped** (6 Phase-5 added; the live-API test is
+skipped without a key). Offline `HeuristicCallExtractor` scores **100% exact-match** on all 7
+fields of all 5 notes; extracted calls finalize into valid Calls and flow through the engine.
+
+**Assumptions / decisions:**
+- The extractor reads only the legible call fields; `resolution_date`/`initial_price` are NOT
+  taken from the text — they are computed at record time from the calendar + provider, keeping
+  the look-ahead-safe deadline logic in one place.
+- Horizon phrasing maps months→trading days (12→252, 6→126, 3→63); default 252 if unstated.
+- The offline heuristic is tuned to the synthetic note style (labelled header + prose body)
+  and recognizes the synthetic universe tickers; the LLM path handles arbitrary messy prose.
+
+**Limitations:** offline extractor is rule-based and not meant for arbitrary real notes (that is
+the LLM path's job); the live-API accuracy is asserted only when a key is present.
+
