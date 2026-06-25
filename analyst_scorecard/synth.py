@@ -234,7 +234,9 @@ PROFILES: tuple[Profile, ...] = (
         ground_truth="Near-random: ratings unrelated to the future, random targets. Expect "
         "middling direction (~base rate) and beat-market near zero.",
         recipes=(
-            Recipe(14, any_window, rand_rating, rand_pm_target()),
+            # Many calls so the headline (a MEAN excess return) regresses to a random
+            # book's true expectation instead of being swung by one lucky outlier.
+            Recipe(24, any_window, rand_rating, rand_pm_target()),
         ),
     ),
     Profile(

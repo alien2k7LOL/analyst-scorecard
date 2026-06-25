@@ -106,3 +106,78 @@ window can never be silently scored.
 synthetic calls). A real provider needs an explicit "next trading day on/after" rule for holidays
 / missing data — noted as a next step.
 
+---
+
+## Phase 3 — Scoring engine (direction gate → accuracy → beat-the-market)  ✅
+**Built:** `scoring.py` (`bucket_direction`, `compute_accuracy`, `score_call`) and
+`aggregation.py` (`score_calls`, `aggregate_analyst`, `aggregate_all`, `build_leaderboard`).
+
+### EXACT METRIC DEFINITIONS (the audit trail — applied identically to every analyst)
+Let `P_call`, `P_actual` = stock close on call/resolution date; `P_target` = the analyst's
+target; `B_call`, `B_actual` = benchmark close on call/resolution date. Over the horizon:
+`stock_return = P_actual/P_call − 1`, `benchmark_return = B_actual/B_call − 1`.
+
+- **Implied direction** (frozen map): Buy/Overweight→UP, Sell/Underweight→DOWN, Hold→FLAT.
+- **Stage 1 — DIRECTION GATE (pass/fail).** Bucket the realized move with one shared band
+  `b = direction_flat_band = 0.02`: `stock_return > b`→UP, `< −b`→DOWN, else FLAT. The call
+  PASSES iff realized direction == implied direction. (Boundary `±b` is FLAT.)
+- **Stage 2 — ACCURACY ∈ (0,1], only for direction-passers.**
+  `error_frac = |P_actual − P_target| / P_call`;
+  `sigma_h = max(realized daily-log-return std (ddof=1) × √(horizon steps), min_sigma_h)`;
+  `accuracy = exp( − error_frac / (sigma_h × accuracy_scale) )`, `accuracy_scale = 1.0`.
+  Exactly `1.0` iff `P_actual == P_target`. accuracy is `None` for calls that FAILED the gate.
+- **Stage 3 — BEAT-THE-MARKET (headline).** `position` = +1 long (UP) / −1 short (DOWN) /
+  0 (Hold). For directional calls: `call_return = position × stock_return`;
+  `beat = call_return − benchmark_return`. Computed for **all directional calls — winners and
+  losers** (a wrong-direction Buy still loses money and that loss counts). Hold = neutral,
+  EXCLUDED from the beat book. v1 ignores borrow/financing cost; long & short are symmetric.
+- **Per-analyst aggregates:** `direction_hit_rate` = passes / ALL calls (Holds included);
+  `mean_accuracy` = mean accuracy over direction-PASSING calls (None if none);
+  **`beat_market`** = mean `beat` over ALL directional calls (None if none) — averaged, not
+  compounded, so it is comparable across analysts with different call counts.
+- **Leaderboard:** ranked by `beat_market` desc (None — no directional calls — sorts last).
+
+**Funnel shape:** direction GATES accuracy; beat-the-market is its OWN headline over every
+directional call (NOT gated by direction).
+
+**Observed leaderboard (default seed, 108 calls):** Vega +40.5% (skilled, top) · Ursa +33.3% ·
+ShortAlpha +22.8% · Coinflip +15.0% (dir 29%) · Meridian +13.0% · Tortoise +9.5% ·
+MomentumOne −4.8% (dir 93%) · Hubris −4.8% (dir 10%).
+
+**Test results:** `pytest` → **52 passed** (15 Phase-3 unit tests added).
+
+## Phase 4 — Validation suite (most important)  ✅
+**Built:** `tests/test_phase4_validation.py` (12 tests) running the real synthetic dataset
+through the full funnel. All pass:
+- **Buy-only rider** (MomentumOne): direction hit-rate 93% (HIGH) yet `beat_market` = −4.8%
+  (≤ 0) — the headline strips out free market gains. ✓
+- **Skilled picker** (Vega): `beat_market` = +40.5% (> 0), tops the leaderboard. ✓
+- **Contrarian** (Ursa): direction 82% (good) but mean accuracy 0.48 (poor; ≪ Vega's 0.95). ✓
+- **Overconfident-wrong** (Hubris): direction 10%, beat < 0. ✓  **Short-seller** (ShortAlpha):
+  beat > 0 — beat-the-market works for shorts. ✓
+- **Separation:** rider and skilled both have high direction, but the headline ranks skilled far
+  above the rider, and the rider lands in the bottom half. ✓
+- **Monotonicity:** a bullseye scores exactly 1.0 and no call exceeds it; flipping an outcome
+  flips the direction result; adding Δ to every benchmark return lowers EVERY analyst's
+  beat-market by exactly Δ (uniform, fair). ✓
+- **Reproducibility:** identical seed ⇒ identical leaderboard (value-equal); a different seed
+  changes the scores. ✓
+
+**Assumptions / decisions (scoring-relevant):**
+- **Revision policy (declared, uniform):** a revised target CLOSES the old call at its original
+  resolution date and OPENS a new call from the revision date; the old call is still scored on
+  its own horizon. (No revisions appear in the v1 synthetic set; the policy is fixed for when
+  they do — enforced by the "deadline is sacred" resolver rule.)
+- **Partial hits:** there is no special "partially hit" bucket. A target is never required to be
+  *touched*; the call is graded purely on (a) realized direction vs implied and (b) how close
+  `P_actual` landed to `P_target`, normalized by volatility. This is uniform and unambiguous.
+- **HONEST LIMITATION — small-sample beat:** `beat_market` is a mean excess return and is
+  outlier-sensitive when an analyst has few directional calls and the universe has fat-tailed
+  winners. The near-random analyst (Coinflip) posts a positive beat by luck even at 24 calls; its
+  29% direction hit-rate is what exposes it as not-skilled. Real use needs call-count weighting /
+  significance testing (next step). The point estimate alone is not proof of skill.
+
+**Limitations:** ground truth is constructed by conditioning fixtures on the realized synthetic
+future (world-building, documented in `synth.py`); validation shows the engine RECOVERS planted
+skill, not that real analysts behave this way.
+
