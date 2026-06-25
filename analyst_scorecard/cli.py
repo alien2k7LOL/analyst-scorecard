@@ -71,11 +71,17 @@ def run_simulation(config: ScorecardConfig = DEFAULT_CONFIG, *, quiet: bool = Fa
     if not quiet and max_events is not None and len(result.events) > max_events:
         print(f"  ... ({len(result.events) - max_events} more resolutions)", file=stream)
 
+    # Plain-English verdicts (offline templated fallback unless ANTHROPIC_API_KEY is set).
+    from .verdicts import default_verdict_generator
+
+    gen = default_verdict_generator()
+    verdicts = {s.analyst_id: gen.verdict(s) for s in result.leaderboard.rows}
+
     print("", file=stream)
     if result.clock_start and result.clock_end:
         print(f"Synthetic time advanced {result.clock_start} → {result.clock_end}.", file=stream)
     print(f"\n=== LEADERBOARD (ranked by Beat-the-Market — the headline) ===\n", file=stream)
-    print(render_leaderboard(result.leaderboard), file=stream)
+    print(render_leaderboard(result.leaderboard, verdicts=verdicts), file=stream)
     print("", file=stream)
     return result
 

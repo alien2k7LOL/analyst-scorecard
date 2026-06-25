@@ -246,3 +246,21 @@ reproducible; the CLI prints the leaderboard with the skilled picker on top.
 **Limitations:** the simulation replays a fixed, fully-known synthetic price history; a live
 deployment would instead wake on real calendar dates as deadlines pass.
 
+---
+
+## Phase 8 — Plain-English verdicts  ✅  *(built before Phase 7 so the app can show them)*
+**Built:** `verdicts.py` — `VerdictGenerator` interface, `TemplatedVerdictGenerator` (offline,
+deterministic, honest one-liner from the stats), `LLMVerdictGenerator` (Anthropic
+`messages.create`, key from env, raises if absent), and `default_verdict_generator()` which
+returns the LLM one when a key is present and the templated one otherwise. Wired into the CLI
+leaderboard output.
+
+**Test results:** `pytest` → **72 passed, 2 skipped** (6 Phase-8 added; live-API verdict skipped
+without a key). The templated verdict keys off the HEADLINE, not just direction: the rider gets
+"…but you'd have done better just holding the index"; the skilled picker gets "…beat the index";
+the contrarian gets "…targets are wildly off". (Coinflip's honest "usually wrong on direction
+*and* beat the index" line is exactly the small-sample caveat made visible.)
+
+**Assumptions:** verdict thresholds (direction ≥0.70 / ≥0.55 / ≥0.45; beat ±0.02; accuracy
+≥0.80 / <0.50) are fixed in one place and applied uniformly.
+
