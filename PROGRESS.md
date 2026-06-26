@@ -420,3 +420,28 @@ Petrova (skilled) **+34.7%**.
 `score_call(resolve_call_with_provider(call), DEFAULT_CONFIG)` computed directly — proving the
 runner reuses the engine and adds no custom scoring.
 
+## Phase E — Look-ahead-safety validation (most important)  ✅
+**Built:** `tests/test_backtest_phaseE_lookahead.py` (5 tests, all pass). The leakage guarantees,
+now proven on historical-style data:
+1. **Post-horizon prices are provably ignored.** For a call resolving at index 30, scoring is
+   BYTE-IDENTICAL whether the post-horizon prices are present, truncated, or multiplied by 1000
+   (stock and benchmark). The future cannot enter the score.
+2. **A verdict that would flip if leaked stays correct.** A Buy whose stock is DOWN at its horizon
+   (FAIL) but moons to 200× afterwards is scored FAIL — the post-horizon moon is ignored. Moving
+   that same high price INSIDE the horizon flips it to PASS, proving the verdict is driven purely
+   by in-window data.
+3. **Reproducible:** the same sample inputs produce an identical historical leaderboard and
+   identical resolved/skipped/dropped counts.
+4. **Same fairness guarantees as the synthetic suite:** the perma-bull (`calloway`) has ≥70%
+   direction but beat-market ≤ 0; the skilled picker (`petrova`) has beat-market > 0; the headline
+   separates them despite both looking strong on direction.
+5. **End-to-end:** deleting EVERY price after the last resolution date leaves the whole leaderboard
+   unchanged (every resolved call resolved on/before that date, so future data is a no-op).
+
+**Leakage guarantee (how it's enforced):** historical resolution flows ONLY through
+`resolve_call_with_provider`, which hands the resolver a `PriceWindow` physically ending at the
+resolution date (`PriceWindow.__post_init__` rejects any series extending past it). The runner
+pre-classifies resolvability from data presence (not exception text). There is no code path by
+which a price after a call's resolution date can reach its score. **Full suite: 102 passed, 2
+skipped.**
+
