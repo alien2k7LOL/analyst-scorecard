@@ -323,3 +323,33 @@ by a test that would fail if future data leaked or a rule were applied unevenly.
 - Known limitation: beat is an outlier-sensitive point estimate at small call counts
   (needs significance testing for real use).
 
+---
+---
+
+# BACK-TEST EXTENSION — seed the scoreboard with real past calls
+
+Goal: grade real analysts on real past price-target calls (outcomes already known) through the
+**same** validated engine, so the board launches with a genuine track record. Look-ahead bias is
+the #1 risk now (the "future" is already in the file), so it is guarded relentlessly. See
+[BACKTEST_PLAN.md](BACKTEST_PLAN.md).
+
+## Phase A — Read & plan  ✅
+**Did:** re-read the engine contracts (`price_provider.py`, `call_provider.py`, `resolution.py`,
+`schemas.py`, `aggregation.py`, `config.py`) and wrote `BACKTEST_PLAN.md`. Confirmed the historical
+path can REUSE the engine unchanged:
+- `HistoricalPriceFileProvider` only needs the 4 abstract methods (`benchmark_symbol`, `tickers`,
+  `trading_days`, `price_series`); the concrete `window_for_call`/`price_window_series`/
+  `trading_day_offset` come for free and already enforce the look-ahead window.
+- Scoring/aggregation read only `direction_flat_band/accuracy_scale/min_sigma_h` from config and
+  the benchmark **symbol** from the provider — so historical data uses `DEFAULT_CONFIG`'s rules
+  IDENTICALLY, and the provider supplies its own data-derived benchmark/calendar.
+- `PriceWindow`'s strict endpoint invariant (series must start at call_date and end at
+  resolution_date) is the built-in skip-trigger for delisted/missing windows — no engine change.
+
+**Decisions recorded in the plan:** long-format `prices.csv` (adjusted close), `calls.csv`
+(+ rating-synonym normalization), a `manifest.json`; documented uniform policies for call-date
+snapping, default 12-month horizon, missing windows (skip + log), and revisions (separate dated
+rows resolved independently); the look-ahead-safety test strategy.
+
+**No engine files modified.** Synthetic suite remains green (will re-confirm after each phase).
+
