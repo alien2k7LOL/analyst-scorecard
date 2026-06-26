@@ -12,12 +12,13 @@ def test_app_renders_historical_tab():
     assert list(at.exception) == [], at.exception
 
     headers = [h.value for h in at.header]
-    # the synthetic views still render (no regression)
-    assert "Leaderboard — ranked by Beat-the-Market" in headers
+    subheaders = [h.value for h in at.subheader]
+    # the synthetic views still render (the leaderboard is now a subheader under the Proof-1 intro)
+    assert "Leaderboard — ranked by Beat-the-Market" in subheaders
     # the historical views render
     assert "Historical Leaderboard" in headers
     assert "Historical Analyst Profile" in headers
-    assert "Historical Call-level Drill-down" in headers
+    # (the historical call-level drill-down is now inside an expander; its table is counted below)
 
     # the historical analyst selector is populated from the sample (perma-bull + skilled present)
     hist_selectbox = next(sb for sb in at.selectbox if sb.label == "Choose an analyst (historical)")

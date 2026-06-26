@@ -84,11 +84,12 @@ def test_streamlit_app_renders_all_three_views():
 
     at = AppTest.from_file(str(REPO_ROOT / "app.py"), default_timeout=120).run()
     assert list(at.exception) == [], at.exception
-    headers = [h.value for h in at.header]
-    assert "Leaderboard — ranked by Beat-the-Market" in headers
-    assert "Analyst Profile" in headers
-    assert "Call-level drill-down — full traceability" in headers
-    # leaderboard table + drill-down table both rendered
+    subheaders = [h.value for h in at.subheader]
+    assert "Leaderboard — ranked by Beat-the-Market" in subheaders
+    assert "Analyst Profile" in subheaders
+    # the call-level drill-down is now inside an expander; its table still renders below
     assert len(at.dataframe) >= 2
-    # analyst selector is populated, ranked by beat-market (skilled picker first)
-    assert at.selectbox[0].options[0] == "Vega Capital"
+    # analyst selector is populated, ranked by beat-market (skilled picker first).
+    # Find it by content (robust to tab order) rather than a positional index.
+    syn_box = next(sb for sb in at.selectbox if "Vega Capital" in sb.options)
+    assert syn_box.options[0] == "Vega Capital"
