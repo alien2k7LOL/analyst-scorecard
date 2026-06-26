@@ -353,3 +353,26 @@ rows resolved independently); the look-ahead-safety test strategy.
 
 **No engine files modified.** Synthetic suite remains green (will re-confirm after each phase).
 
+## Phase B — File-based adapters  ✅
+**Built (no engine files touched):**
+- `providers/historical_price_provider.py` — `HistoricalPriceFileProvider(PriceDataProvider)`:
+  reads long-format `prices.csv` + `manifest.json`, builds per-symbol series (ragged coverage,
+  NaN-dropped), calendar = benchmark dates. Implements only the 4 abstract methods; inherits the
+  look-ahead-safe `window_for_call`/`trading_day_offset`. Adds `has_symbol`, `has_data`,
+  `next_trading_day_on_or_after`, and a `from_frame` test constructor.
+- `providers/historical_call_provider.py` — `HistoricalCallFileProvider(AnalystCallProvider)`:
+  reads `calls.csv`/`.json`, normalizes rating synonyms, snaps call dates forward, fixes the
+  record-time deadline via the benchmark calendar, reads the call-date entry price, and emits
+  strict `Call` objects. Unbuildable rows are dropped into `ingest_issues` with a reason.
+
+**Test results:** `tests/test_backtest_phaseB_adapters.py` → **5 passed**; synthetic provider tests
+(Phase 1/2) **still 23 passed**. Confirms: calendar = benchmark dates; ragged/delisted coverage;
+a delisted-ticker window is rejected by `PriceWindow`; Saturday call dates snap forward; default
+12-month / explicit 6-month horizons → 252/126 trading days; rating synonyms map correctly; and
+the five ingest-drop reasons (`BAD_RATING`, `UNKNOWN_TICKER`, `NO_ENTRY_PRICE`,
+`HORIZON_BEYOND_DATA`, `CALL_DATE_OUT_OF_RANGE`) fire as documented.
+
+**Decisions:** scoring uses `DEFAULT_CONFIG` (identical rules to synthetic); the provider supplies
+its own benchmark symbol + calendar from the data. Call dates are snapped FORWARD only (never
+backward → no future info). Interior price gaps are tolerated (only window ENDPOINTS must exist).
+
