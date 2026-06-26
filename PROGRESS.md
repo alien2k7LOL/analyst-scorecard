@@ -445,3 +445,20 @@ pre-classifies resolvability from data presence (not exception text). There is n
 which a price after a call's resolution date can reach its score. **Full suite: 102 passed, 2
 skipped.**
 
+## Phase F — Surface the history in the app  ✅
+**Built:** restructured `app.py` into two tabs (synthetic unchanged, first; historical second),
+reusing the SAME generic `viz` table/chart functions on the `BacktestResult`:
+- **Historical Leaderboard** (beat-market ranked) + bar chart + plain-English verdicts.
+- **Historical Analyst Profile** — the following-the-call-vs-index scatter over the historical
+  span (skilled above the line, perma-bull below) + metric tiles.
+- **Historical Call-level Drill-down** — each historical call and the exact original-window prices
+  that resolved it.
+- A **Source: SAMPLE vs user-supplied** caption (from `manifest.is_sample`), a counts line
+  (resolved / skipped / dropped), and a transparency expander listing skipped & ingest-dropped
+  calls with reasons. A sidebar text box points the historical tab at any data folder.
+
+**Test results:** `tests/test_backtest_phaseF_app.py` → **1 passed** (AppTest: no exceptions, all
+three historical headers render, the historical selector lists the perma-bull and the skilled
+picker). The synthetic AppTest still passes unchanged (no regression). Full suite **103 passed,
+2 skipped**.
+
