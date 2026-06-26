@@ -399,3 +399,24 @@ across processes (verified by md5).
 2 skipped**. Confirms ragged/delisted coverage, the ingest-drop and delisting cases, the revision
 pair, and generator determinism (`build_prices`/`build_calls` identical on re-run).
 
+## Phase D — Historical back-test runner + CLI  ✅
+**Built:**
+- `backtest.py` — `HistoricalBacktest.run()` walks calls forward by `resolution_date` and, for each
+  resolvable call, calls the UNCHANGED `resolve_call_with_provider` → `score_call`, then aggregates
+  via the existing `aggregate_analyst` / `Leaderboard.from_scores`. `_unresolvable_reason` classifies
+  skips from data presence (delisted/halted → `DELISTED_OR_HALTED`, etc.). Returns a rich
+  `BacktestResult` (leaderboard, per-analyst scores, resolved scores, skips, ingest issues, span,
+  counts, reason histograms). `load_backtest` / `run_backtest` wire the providers for a folder.
+- `backtest_cli.py` — `python -m analyst_scorecard.backtest_cli [--data-dir … --show-skips --quiet]`
+  prints the historical leaderboard (reusing `cli.render_leaderboard` + templated verdicts), the
+  span, and full skip/ingest transparency, labelled SAMPLE vs user-supplied.
+
+**Sample result:** 61 ingested, **60 resolved**, **1 skipped** (HALT `DELISTED_OR_HALTED`), 2
+ingest-dropped (still-open). Reed Calloway (perma-bull) 100% direction but **−10.7% beat**; Ana
+Petrova (skilled) **+34.7%**.
+
+**Test results:** `tests/test_backtest_phaseD_runner.py` → **7 passed**. Notably,
+`test_runner_uses_the_unchanged_engine_path` asserts each resolved `CallScore` is byte-equal to
+`score_call(resolve_call_with_provider(call), DEFAULT_CONFIG)` computed directly — proving the
+runner reuses the engine and adds no custom scoring.
+
