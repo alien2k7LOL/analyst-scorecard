@@ -376,3 +376,26 @@ the five ingest-drop reasons (`BAD_RATING`, `UNKNOWN_TICKER`, `NO_ENTRY_PRICE`,
 its own benchmark symbol + calendar from the data. Call dates are snapped FORWARD only (never
 backward → no future info). Interior price gaps are tolerated (only window ENDPOINTS must exist).
 
+## Phase C — Local sample dataset  ✅
+**Built:** `data/sample_historical/` — `prices.csv` (long format, 31,499 rows, 17 fictional
+tickers + `SPX` benchmark, ~7 years 2017–2023, ragged for the delisted name), `calls.csv` (63
+calls), `manifest.json`, a folder `README.md` (schema + policies + how to drop in real data), and
+`_generate_sample.py` (the deterministic generator). Everything is CLEARLY LABELLED SAMPLE/
+synthetic; tickers/firms/analysts are fictional.
+
+**Edge cases included:** perma-bull (`calloway`, only Buys on index-laggers), skilled picker
+(`petrova`, longs that beat + shorts on decliners), a **delisted ticker** `HALT` (a Buy whose
+horizon ends after it stops trading → skipped at resolution), a **revised target** (`brandt` on
+`ORCA` — two dated rows within one horizon, resolved independently), and two **still-open** recent
+calls (→ `HORIZON_BEYOND_DATA` ingest drops).
+
+**Verified inline through the UNCHANGED engine** (resolve → score → aggregate with `DEFAULT_CONFIG`):
+perma-bull 100% direction / **beat −10.7%** (≤ 0); skilled **beat +34.7%** (> 0); near-random −28.7%
+at 8% direction; HALT skipped; 2 ingest drops. Fixed a reproducibility bug — the generator now
+seeds via `hashlib` (not `PYTHONHASHSEED`-salted builtin `hash`), so the files are byte-identical
+across processes (verified by md5).
+
+**Test results:** `tests/test_backtest_phaseC_sample.py` → **6 passed**; full suite **90 passed,
+2 skipped**. Confirms ragged/delisted coverage, the ingest-drop and delisting cases, the revision
+pair, and generator determinism (`build_prices`/`build_calls` identical on re-run).
+

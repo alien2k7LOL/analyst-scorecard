@@ -1,0 +1,6 @@
+{
+  "benchmark_symbol": "SPX",
+  "default_horizon_months": 12,
+  "label": "SAMPLE historical data (synthetic, fictional tickers/firms/analysts)",
+  "is_sample": true
+}

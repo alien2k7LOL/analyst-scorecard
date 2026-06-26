@@ -1,0 +1,64 @@
+call_id,analyst_id,analyst_name,firm,ticker,rating,target_price,call_date,horizon_months,note
+calloway-000,calloway,Reed Calloway,Mornington Capital,DLTA,Buy,34.51,2021-08-19,12,perma-bull: rode the index up but lagged it
+calloway-001,calloway,Reed Calloway,Mornington Capital,BRGE,Buy,128.1,2021-12-31,12,perma-bull: rode the index up but lagged it
+calloway-002,calloway,Reed Calloway,Mornington Capital,CALD,Buy,105.97,2021-01-14,12,perma-bull: rode the index up but lagged it
+calloway-003,calloway,Reed Calloway,Mornington Capital,FRTH,Buy,195.14,2022-08-22,12,perma-bull: rode the index up but lagged it
+calloway-004,calloway,Reed Calloway,Mornington Capital,CALD,Buy,123.07,2020-09-21,12,perma-bull: rode the index up but lagged it
+calloway-005,calloway,Reed Calloway,Mornington Capital,FRTH,Buy,292.48,2017-06-08,12,perma-bull: rode the index up but lagged it
+calloway-006,calloway,Reed Calloway,Mornington Capital,DLTA,Buy,32.79,2021-07-23,12,perma-bull: rode the index up but lagged it
+calloway-007,calloway,Reed Calloway,Mornington Capital,CALD,Buy,114.4,2020-12-10,12,perma-bull: rode the index up but lagged it
+calloway-008,calloway,Reed Calloway,Mornington Capital,DLTA,Buy,38.69,2022-08-11,12,perma-bull: rode the index up but lagged it
+calloway-009,calloway,Reed Calloway,Mornington Capital,CALD,Buy,117.71,2020-11-18,12,perma-bull: rode the index up but lagged it
+calloway-010,calloway,Reed Calloway,Mornington Capital,FRTH,Buy,302.59,2017-07-17,12,perma-bull: rode the index up but lagged it
+calloway-011,calloway,Reed Calloway,Mornington Capital,FRTH,Buy,301.32,2017-07-26,12,perma-bull: rode the index up but lagged it
+calloway-012,calloway,Reed Calloway,Mornington Capital,FRTH,Buy,246.79,2019-09-02,12,perma-bull: rode the index up but lagged it
+calloway-013,calloway,Reed Calloway,Mornington Capital,CALD,Buy,116.67,2020-12-08,12,perma-bull: rode the index up but lagged it
+calloway-014,calloway,Reed Calloway,Mornington Capital,CALD,Buy,118.22,2020-12-07,12,perma-bull: rode the index up but lagged it
+calloway-015,calloway,Reed Calloway,Mornington Capital,CALD,Buy,120.31,2019-09-20,12,perma-bull: rode the index up but lagged it
+petrova-016,petrova,Ana Petrova,Halberd Research,QBIT,Buy,132.68,2020-11-11,12,skilled long
+petrova-017,petrova,Ana Petrova,Halberd Research,QBIT,Buy,147.65,2017-05-02,12,skilled long
+petrova-018,petrova,Ana Petrova,Halberd Research,QBIT,Buy,126.82,2017-03-29,12,skilled long
+petrova-019,petrova,Ana Petrova,Halberd Research,ORCA,Buy,212.87,2017-07-17,12,skilled long
+petrova-020,petrova,Ana Petrova,Halberd Research,HLIX,Buy,100.41,2017-04-13,12,skilled long
+petrova-021,petrova,Ana Petrova,Halberd Research,HLIX,Buy,115.91,2020-01-14,12,skilled long
+petrova-022,petrova,Ana Petrova,Halberd Research,PYRA,Buy,74.62,2020-05-12,12,skilled long
+petrova-023,petrova,Ana Petrova,Halberd Research,HLIX,Buy,85.82,2020-08-24,12,skilled long
+petrova-024,petrova,Ana Petrova,Halberd Research,HLIX,Buy,105.61,2020-04-17,12,skilled long
+petrova-025,petrova,Ana Petrova,Halberd Research,HLIX,Buy,83.41,2022-10-05,12,skilled long
+petrova-026,petrova,Ana Petrova,Halberd Research,QBIT,Buy,128.7,2022-01-13,12,skilled long
+petrova-027,petrova,Ana Petrova,Halberd Research,AVTX,Buy,38.8,2022-05-05,12,skilled long
+petrova-028,petrova,Ana Petrova,Halberd Research,LMNT,Sell,21.71,2018-09-24,12,skilled short
+petrova-029,petrova,Ana Petrova,Halberd Research,KRNC,Sell,6.23,2021-09-30,12,skilled short
+petrova-030,petrova,Ana Petrova,Halberd Research,KRNC,Sell,20.55,2017-07-06,12,skilled short
+petrova-031,petrova,Ana Petrova,Halberd Research,LMNT,Sell,27.8,2017-11-15,12,skilled short
+demir-032,demir,Yusuf Demir,Beaumont & Pike,KRNC,Sell,10.86,2018-04-20,12,"contrarian: right direction, wild target"
+demir-033,demir,Yusuf Demir,Beaumont & Pike,LMNT,Sell,9.78,2019-08-12,12,"contrarian: right direction, wild target"
+demir-034,demir,Yusuf Demir,Beaumont & Pike,LMNT,Sell,7.13,2021-03-03,12,"contrarian: right direction, wild target"
+demir-035,demir,Yusuf Demir,Beaumont & Pike,KRNC,Sell,10.72,2018-04-11,12,"contrarian: right direction, wild target"
+demir-036,demir,Yusuf Demir,Beaumont & Pike,KRNC,Sell,23.84,2017-06-29,12,"contrarian: right direction, wild target"
+demir-037,demir,Yusuf Demir,Beaumont & Pike,LMNT,Sell,9.79,2020-10-15,12,"contrarian: right direction, wild target"
+demir-038,demir,Yusuf Demir,Beaumont & Pike,QBIT,Buy,190.81,2022-10-10,12,"contrarian: right direction, wild target"
+demir-039,demir,Yusuf Demir,Beaumont & Pike,QBIT,Buy,87.45,2017-01-18,12,"contrarian: right direction, wild target"
+demir-040,demir,Yusuf Demir,Beaumont & Pike,ORCA,Buy,188.57,2017-04-03,12,"contrarian: right direction, wild target"
+demir-041,demir,Yusuf Demir,Beaumont & Pike,HLIX,Buy,110.32,2020-01-10,12,"contrarian: right direction, wild target"
+lindqvist-042,lindqvist,Maya Lindqvist,Cobblestone Securities,ORCA,Hold,213.47,2020-07-22,12,near-random
+lindqvist-043,lindqvist,Maya Lindqvist,Cobblestone Securities,CALD,Sell,77.84,2022-01-06,12,near-random
+lindqvist-044,lindqvist,Maya Lindqvist,Cobblestone Securities,JADE,Buy,120.98,2018-10-22,12,near-random
+lindqvist-045,lindqvist,Maya Lindqvist,Cobblestone Securities,HVNS,Underweight,129.31,2020-10-20,12,near-random
+lindqvist-046,lindqvist,Maya Lindqvist,Cobblestone Securities,BRGE,Hold,81.91,2018-04-20,12,near-random
+lindqvist-047,lindqvist,Maya Lindqvist,Cobblestone Securities,JADE,Overweight,64.71,2019-09-06,12,near-random
+lindqvist-048,lindqvist,Maya Lindqvist,Cobblestone Securities,JADE,Hold,87.49,2018-04-12,12,near-random
+lindqvist-049,lindqvist,Maya Lindqvist,Cobblestone Securities,PYRA,Buy,85.79,2017-07-07,12,near-random
+lindqvist-050,lindqvist,Maya Lindqvist,Cobblestone Securities,ORCA,Sell,163.22,2017-06-26,12,near-random
+lindqvist-051,lindqvist,Maya Lindqvist,Cobblestone Securities,LMNT,Hold,6.0,2022-01-03,12,near-random
+lindqvist-052,lindqvist,Maya Lindqvist,Cobblestone Securities,HLIX,Overweight,71.3,2020-11-24,12,near-random
+lindqvist-053,lindqvist,Maya Lindqvist,Cobblestone Securities,QBIT,Hold,165.49,2019-04-08,12,near-random
+brandt-054,brandt,Owen Brandt,Trell & Vance,AVTX,Buy,69.65,2022-11-18,12,generalist long
+brandt-055,brandt,Owen Brandt,Trell & Vance,AVTX,Buy,43.83,2018-03-28,12,generalist long
+brandt-056,brandt,Owen Brandt,Trell & Vance,HLIX,Buy,98.32,2019-11-11,12,generalist long
+brandt-057,brandt,Owen Brandt,Trell & Vance,AVTX,Buy,62.31,2019-10-31,12,generalist long
+brandt-058,brandt,Owen Brandt,Trell & Vance,ORCA,Buy,241.15,2018-02-27,12,original target (revised later)
+brandt-059,brandt,Owen Brandt,Trell & Vance,ORCA,Buy,236.42,2018-05-22,12,REVISED target (closes the original at its own horizon; opens this new call)
+demir-060,demir,Yusuf Demir,Beaumont & Pike,HALT,Buy,4.96,2019-10-01,12,ticker delists mid-horizon -> back-test must skip this call
+petrova-061,petrova,Ana Petrova,Halberd Research,QBIT,Buy,174.62,2023-06-13,12,"recent call, still open (resolves after data ends)"
+calloway-062,calloway,Reed Calloway,Mornington Capital,BRGE,Buy,123.51,2023-08-08,12,"recent call, still open"
