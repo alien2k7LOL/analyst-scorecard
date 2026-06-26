@@ -462,3 +462,34 @@ three historical headers render, the historical selector lists the perma-bull an
 picker). The synthetic AppTest still passes unchanged (no regression). Full suite **103 passed,
 2 skipped**.
 
+## FINAL — README + closing state  ✅
+**Built:** added a full **Historical back-test** section to `README.md` — how to run
+(`backtest_cli`, app tab), the file schemas + how to drop in real data, the documented policies
+(snapping, default 12-month horizon, revisions = separate dated rows, missing windows / delisted →
+skip+log), the look-ahead-safety guarantee and how it's tested, back-test-specific limitations, and
+a prioritized go-live next-steps list (real continuously-updating provider, curated real calls,
+delisting-at-terminal-price option, significance testing, continuous operation, richer benchmarks).
+`BACKTEST_PLAN.md` documents the reuse-not-reimplement design.
+
+**Final test state:** `pytest` → **103 passed, 2 skipped** (the 2 skips are the live-API extractor
+and verdict tests; everything else is fully offline, ~3s). The original synthetic engine is
+unchanged and still green.
+
+**Phase status (back-test):** A–F + final all complete and committed (one commit per phase). The
+historical back-test grades real-style past calls through the SAME validated engine, is provably
+look-ahead-safe (Phase E), handles the messy real-world cases (delisting, revisions, still-open,
+bad data) with documented uniform policies, and is surfaced in the CLI and app — launching the
+scoreboard with a genuine, reproducible track record.
+
+### Consolidated back-test guarantees (audit trail)
+- Resolution flows ONLY through `resolve_call_with_provider`; `PriceWindow` physically ends at the
+  resolution date → no price after a call's horizon can reach its score (proven 5 ways in Phase E).
+- Scoring uses `DEFAULT_CONFIG` → historical and synthetic calls are graded by IDENTICAL rules.
+- The runner adds only skip-handling around the unchanged engine (resolved `CallScore` == direct
+  `score_call` output, asserted in Phase D).
+- Policies are fixed in one place and applied to every analyst: call-date snapping (forward-only),
+  12-month default horizon, revisions as independent dated rows, delisted/missing → skip + log,
+  ingest drops logged with reasons.
+- Sample data is clearly labelled synthetic/fictional and deterministically reproducible (hashlib
+  seeds; byte-identical across processes).
+

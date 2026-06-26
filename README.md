@@ -22,8 +22,9 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
 pytest                                   # run the full test suite (offline)
-python -m analyst_scorecard.cli          # run the end-to-end simulation, print the leaderboard
-streamlit run app.py                     # launch the demo app
+python -m analyst_scorecard.cli          # synthetic end-to-end simulation, print the leaderboard
+python -m analyst_scorecard.backtest_cli # HISTORICAL back-test on the sample data (real-call grading)
+streamlit run app.py                     # launch the demo app (Synthetic + Historical tabs)
 python -m analyst_scorecard.synth        # (re)generate the synthetic call fixtures
 python -m analyst_scorecard.viz          # save the leaderboard + profile charts as PNGs
 ```
@@ -208,20 +209,107 @@ both `claude-opus-4-8`, both with deterministic offline fallbacks.
 - **Beat-the-market ignores borrow/financing costs** and treats long and short symmetrically.
 - **Revisions and multi-horizon calls** are specified but not exercised by the v1 fixtures.
 
-## Prioritized next steps
+---
 
-1. **Wire a real price-data provider** (market-data API / yfinance) behind `PriceDataProvider`,
-   including a holiday-aware "next trading day on/after" resolution rule.
-2. **Source real analyst calls** — run `LLMCallExtractor` over real research notes / disclosures and
-   build a curated, deduped call database.
-3. **Statistical significance for beat-the-market** — confidence intervals / call-count weighting so a
-   lucky small sample can't top the board.
-4. **Handle target revisions and multi-horizon calls** end to end (the close-old / open-new policy is
-   already defined and enforced by the resolver).
-5. **Seed a historical back-test** so the scoreboard launches with real history instead of synthetic.
-6. **Richer benchmarks** (sector/style/beta-adjusted) and short-book financing costs.
+# Historical back-test — seed the scoreboard with real past calls
+
+The synthetic engine above proves the scoring is fair and correct. The **historical back-test**
+grades real analysts on real *past* price-target calls whose outcomes are already known, so the
+board can launch with a genuine track record instead of from zero. It feeds real data through the
+**exact same** look-ahead-safe resolver and three-stage funnel — only the data source changes
+(`HistoricalPriceFileProvider` / `HistoricalCallFileProvider` behind the same interfaces). The
+build is fully offline on a shipped sample; real data drops in by replacing the sample files.
+
+Plan and decisions: [`BACKTEST_PLAN.md`](BACKTEST_PLAN.md).
+
+## Run it
+
+```bash
+python -m analyst_scorecard.backtest_cli                  # the shipped SAMPLE dataset
+python -m analyst_scorecard.backtest_cli --show-skips     # also list skipped / dropped calls
+python -m analyst_scorecard.backtest_cli --data-dir /path/to/your/folder   # your own real data
+streamlit run app.py                                      # the "Historical back-test" tab
+```
+
+Sample output: 61 calls ingested, **60 resolved & scored**, **1 skipped** (`HALT` delisted
+mid-horizon), 2 dropped at ingest (recent, still-open). The perma-bull (`Reed Calloway`) shows a
+**100% direction hit-rate but −10.7% beat-market** — the headline correctly strips the market
+gains he merely rode — while the genuine picker (`Ana Petrova`) is **+34.7%**.
+
+## Supplying your own real data (replace the sample)
+
+Point `--data-dir` (or the app's sidebar box) at a folder with three files. Full schema and a
+worked example: [`data/sample_historical/README.md`](data/sample_historical/README.md).
+
+- **`manifest.json`** — `{ "benchmark_symbol": "SPX", "default_horizon_months": 12 }`. The
+  benchmark defines the "vs the index" comparison and the trading calendar.
+- **`prices.csv`** — long format `date,symbol,close`, where `close` is the **split- and
+  dividend-adjusted** close (returns are computed on it directly). Ragged coverage is allowed: a
+  delisted ticker simply stops having rows.
+- **`calls.csv`** (or `.json`) — `call_id,analyst_id,analyst_name,firm,ticker,rating,target_price,
+  call_date,horizon_months`. `rating` accepts common vocabularies (Outperform→Overweight,
+  Neutral/Equal Weight→Hold, Underperform→Underweight, …); `horizon_months` defaults to 12;
+  `call_date` is the original publication date.
+
+## Documented policies (fixed, uniform, applied to every analyst)
+
+- **Trading calendar** = the benchmark's available dates.
+- **Call-date snapping:** a raw call date is moved FORWARD to the next benchmark trading day
+  (weekend/holiday publication → next session). Forward-only, so no future information is used.
+- **Default horizon:** 12 months → `resolution_date = call_date + round(months/12 × 252)` trading
+  days, fixed at record time and never re-chosen.
+- **Revisions:** record a revised target as a **separate dated row**; each row is resolved
+  independently on its own horizon (this realizes "close the old call at its original horizon, open
+  a new call from the revision date" with no special engine handling).
+- **Missing windows / delisted tickers (skip + log):** if a ticker has no price on its resolution
+  date (delisted/halted mid-horizon), the call is **skipped** with reason `DELISTED_OR_HALTED` and
+  surfaced in the report — never silently scored. Calls that can't even form a closeable record are
+  dropped at ingest with a reason (`HORIZON_BEYOND_DATA` for still-open calls, `NO_ENTRY_PRICE`,
+  `UNKNOWN_TICKER`, `BAD_RATING`, …). A back-test grades only closed, resolvable calls.
+
+## Look-ahead-safety guarantee (the #1 risk on historical data)
+
+A historical call is resolved using **only** prices from its original call date through its
+original horizon date — even though "later" is now in the past and sitting in the file. This is
+structural: resolution flows only through `resolve_call_with_provider`, which hands the resolver a
+`PriceWindow` that physically ends at the resolution date and rejects any series extending past it.
+Proven in [`tests/test_backtest_phaseE_lookahead.py`](tests/test_backtest_phaseE_lookahead.py):
+
+- A score is **byte-identical** whether post-horizon prices are present, truncated, or multiplied
+  by 1000.
+- A Buy that is **down at its horizon (FAIL)** but moons to 200× afterwards is scored **FAIL** —
+  moving that same high price *inside* the horizon flips it to PASS, proving the verdict uses only
+  in-window data.
+- Same inputs ⇒ identical historical leaderboard; deleting **all** data after the last resolution
+  date changes nothing; and the perma-bull/skilled fairness guarantees hold on historical-style
+  data.
+
+## Limitations specific to the back-test
+
+- The shipped dataset is a **clearly-labelled synthetic sample** (fictional tickers/firms/analysts);
+  it exercises the pipeline offline. Real grading requires supplying real files.
+- **Single benchmark; no corporate-action handling in-engine** (prices are assumed pre-adjusted).
+- **Delisted-to-zero calls are skipped, not scored** — conservative (never invents a price), but it
+  lets a pick that blew up and got delisted escape a deserved bad mark.
+
+## Prioritized next steps (going live on top of the historical base)
+
+1. **Wire a real, continuously-updating price provider** (market-data API / yfinance) behind the
+   same `PriceDataProvider`, with a holiday-aware "next trading day on/after" rule and live
+   corporate-action adjustment.
+2. **Source and curate real analyst calls** — run `LLMCallExtractor` over real research/disclosures
+   into `calls.csv`, deduped and revision-aware, to replace the sample.
+3. **Resolve delistings at the terminal/last price** as an explicit, documented policy option, so a
+   blow-up counts against the analyst instead of being skipped.
+4. **Statistical significance for beat-the-market** — confidence intervals / call-count weighting so
+   a lucky small sample (e.g. a 6-call analyst) can't top the board.
+5. **Continuous operation:** a scheduled job that ingests new calls daily, resolves matured ones at
+   their horizons (the time-loop already models this), and appends to the running track record built
+   from the historical back-test.
+6. **Richer benchmarks** (sector/style/beta-adjusted) and short-book financing/borrow costs.
 
 ---
 
-See [`PLAN.md`](PLAN.md) for the full phase plan and [`PROGRESS.md`](PROGRESS.md) for the running
-build log and every scoring assumption recorded as it was made.
+See [`PLAN.md`](PLAN.md) / [`BACKTEST_PLAN.md`](BACKTEST_PLAN.md) for the phase plans and
+[`PROGRESS.md`](PROGRESS.md) for the running build log and every scoring assumption recorded as it
+was made.
