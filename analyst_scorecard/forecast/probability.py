@@ -100,3 +100,110 @@ class GbmTouchModel:
         self, *, s0: float, k: float, n_days: int, mu_daily: float, sigma_daily: float, direction: Direction
     ) -> float:
         return touch_probability(s0, k, n_days, mu_daily, sigma_daily, direction)
+
+
+# --------------------------------------------------------------------------------------
+# Terminal-value model — where will the price BE at the deadline (not "did it ever touch")?
+# --------------------------------------------------------------------------------------
+#
+# "Touch" asks about the PATH max/min over the window; "terminal" asks only about the END point.
+# Under GBM the terminal log return over T trading days is exactly Gaussian,
+#     ln(S_T / S0) ~ Normal(mu*T, sigma^2 * T),
+# so the terminal price has a clean lognormal law and the probability of landing in any price
+# interval [k_lo, k_hi] is a difference of two normal CDFs — no reflection principle needed. A
+# terminal forecast is STRICTLY harder than the matching touch forecast (the path can visit a level
+# and leave it), which is exactly why it's a more honest test of a price-target call.
+
+
+def terminal_probability(
+    s0: float,
+    k: float,
+    n_days: int,
+    mu_daily: float,
+    sigma_daily: float,
+    direction: Direction,
+    band_pct: Optional[float] = None,
+) -> float:
+    """Probability the price is AT/NEAR ``k`` *on* day ``n_days`` (terminal value, not a touch).
+
+    Two modes:
+      * ``band_pct`` given (e.g. 0.03) — lands within ±band of the target: P(k(1-b) <= S_T <= k(1+b)).
+        This is the literal "the price will be that target on the deadline" reading. Direction is
+        irrelevant to the (symmetric) band probability but is accepted for a uniform call signature.
+      * ``band_pct`` None — terminal at-or-beyond the target in the predicted direction:
+        UP = P(S_T >= k), DOWN = P(S_T <= k). This is the "closes the period at/through target" reading.
+    """
+    if s0 <= 0 or k <= 0:
+        raise ValueError("prices must be positive")
+    if n_days < 1:
+        raise ValueError("n_days must be >= 1")
+
+    sigma = max(float(sigma_daily), MIN_SIGMA)
+    T = float(n_days)
+    sd = sigma * np.sqrt(T)
+    mean = float(mu_daily) * T
+
+    def z(level: float) -> float:
+        return (float(np.log(level / s0)) - mean) / sd
+
+    if band_pct is not None:
+        if band_pct <= 0:
+            raise ValueError("band_pct must be > 0")
+        k_lo, k_hi = k * (1.0 - band_pct), k * (1.0 + band_pct)
+        p = float(norm.cdf(z(k_hi)) - norm.cdf(z(k_lo)))
+        return float(np.clip(p, 0.0, 1.0))
+
+    if direction == Direction.UP:
+        p = float(1.0 - norm.cdf(z(k)))      # P(S_T >= k)
+    elif direction == Direction.DOWN:
+        p = float(norm.cdf(z(k)))            # P(S_T <= k)
+    else:
+        raise ValueError("direction must be UP or DOWN")
+    return float(np.clip(p, 0.0, 1.0))
+
+
+def empirical_terminal_probability(
+    s0: float,
+    k: float,
+    n_days: int,
+    daily_log_returns: np.ndarray,
+    direction: Direction,
+    band_pct: Optional[float] = None,
+    n_paths: int = 4000,
+    rng: Optional[np.random.Generator] = None,
+) -> float:
+    """Bootstrap cross-check: resample daily returns, keep only the TERMINAL price of each path."""
+    r = np.asarray(daily_log_returns, dtype=float)
+    if len(r) < 2:
+        return float("nan")
+    rng = rng if rng is not None else np.random.default_rng(0)
+    draws = r[rng.integers(0, len(r), size=(n_paths, n_days))]
+    terminal = s0 * np.exp(draws.sum(axis=1))  # endpoint only — the path in between is irrelevant
+    if band_pct is not None:
+        hit = (terminal >= k * (1.0 - band_pct)) & (terminal <= k * (1.0 + band_pct))
+    elif direction == Direction.UP:
+        hit = terminal >= k
+    elif direction == Direction.DOWN:
+        hit = terminal <= k
+    else:
+        raise ValueError("direction must be UP or DOWN")
+    return float(np.mean(hit))
+
+
+class GbmTerminalModel:
+    """Thin wrapper exposing the closed-form terminal-value probability as a named model."""
+
+    name = "gbm_terminal"
+
+    def probability(
+        self,
+        *,
+        s0: float,
+        k: float,
+        n_days: int,
+        mu_daily: float,
+        sigma_daily: float,
+        direction: Direction,
+        band_pct: Optional[float] = None,
+    ) -> float:
+        return terminal_probability(s0, k, n_days, mu_daily, sigma_daily, direction, band_pct)

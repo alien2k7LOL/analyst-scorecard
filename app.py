@@ -25,6 +25,7 @@ from analyst_scorecard.backtest import SAMPLE_DATA_DIR, run_backtest
 from analyst_scorecard.config import DEFAULT_CONFIG
 from analyst_scorecard.forecast.backtest import ForecastGenConfig, run_forecast_backtest
 from analyst_scorecard.forecast.live import grade_forecast_live
+from analyst_scorecard.forecast.prediction import PredictionKind
 from analyst_scorecard.providers.live_web_price_provider import (
     LiveGradeError,
     grade_live_prediction,
@@ -294,39 +295,64 @@ with tab_live:
 with tab_fcast:
     st.header("Forecast — probability a future prediction comes true")
     st.caption(
-        "Estimate the probability a price **touches your target by a deadline**. The raw estimate "
-        "comes from the stock's own drift + volatility (a closed-form GBM barrier model); it's then "
-        "**self-calibrated on that ticker's own history** so the number reflects how this stock has "
-        "actually behaved. Needs internet + `yfinance`."
+        "Estimate the probability a price **is at your target on the deadline** (terminal) or **reaches "
+        "it any time before** (touch). The raw estimate comes from the stock's own drift + volatility "
+        "(a closed-form GBM model); it's then **self-calibrated on that ticker's own history** so the "
+        "number reflects how this stock has actually behaved. Needs internet + `yfinance`."
     )
     st.warning(
         "This is a **calibrated estimate, not a crystal ball** (a live, point-in-time snapshot — not "
         "reproducible). Judge it by **calibration** (does 70% mean 70%?) and **discrimination** (AUC) "
-        "— **not “% accuracy.”** On our held-out backtest: ECE ≈ 0.02 (well-calibrated), AUC ≈ 0.71 "
-        "price-only / 0.82 with news. The live path is **price-only**; the news lift is the research "
-        "demo below, not applied here."
+        "— **not “% accuracy.”** On our held-out sample backtest (**48k blind predictions**) the model "
+        "stays well-calibrated (**ECE ≈ 0.01**) with **AUC ≈ 0.67** for the harder *terminal* (“at the "
+        "price on the day”) calls and **≈ 0.85** for *touch* calls — both with news (0.5 = coin flip). "
+        "The live path is **price-only**; the news lift is the research demo below, not applied here."
     )
-    st.caption("Example: *“P(AAPL rises to \\$300 by Dec 2026) ≈ 41%”*, plus a calibration curve showing how trustworthy that number is.")
+    st.caption("Two ways to ask it: *“will it **be at** \\$300 (±3%) **on** my deadline?”* (terminal) or "
+               "*“will it **touch** \\$300 **any time** before then?”* (touch) — each with a calibration "
+               "curve showing how trustworthy the number is.")
+
+    kind_label = st.radio(
+        "What are you predicting?",
+        ["🎯 It will **be at** this price ON the deadline",
+         "📈 It will **touch** this price ANY TIME before the deadline"],
+        key="f_kind", horizontal=True,
+    )
+    is_terminal = kind_label.startswith("🎯")
 
     c1, c2, c3 = st.columns(3)
     f_ticker = c1.text_input("Ticker", value="AAPL", key="f_ticker", help="e.g. AAPL, MSFT, NVDA")
-    f_dir_label = c2.selectbox("Direction", ["UP — rises to target", "DOWN — falls to target"], key="f_dir")
+    f_dir_label = c2.selectbox("Direction", ["UP — rises to target", "DOWN — falls to target"], key="f_dir",
+                               help="Which way you expect it to move to reach the target. Orients the trend/news signals.")
     f_target = c3.number_input("Target price ($)", min_value=0.01, value=300.0, step=1.0, key="f_target")
 
     c4, c5, c6 = st.columns(3)
-    f_deadline = c4.date_input("Deadline (in the future)", value=date.today() + timedelta(days=180),
-                               min_value=date.today() + timedelta(days=1), key="f_deadline")
+    f_deadline = c4.date_input("Deadline (a specific date)", value=date.today() + timedelta(days=180),
+                               min_value=date.today() + timedelta(days=1), key="f_deadline",
+                               help="The exact resolution date. Terminal mode grades the close ON this day.")
     f_bench = c5.text_input("Benchmark symbol", value="^GSPC", key="f_bench",
                             help="Index to compare against — ^GSPC is the S&P 500.")
     f_years = c6.slider("Years of history to self-calibrate on", 3, 10, 6, key="f_years")
 
+    if is_terminal:
+        f_band_pct = st.slider("How close counts? Tolerance band around the target (±%)", 1, 15, 3,
+                               key="f_band") / 100.0
+        lo, hi = f_target * (1 - f_band_pct), f_target * (1 + f_band_pct)
+        st.caption(f"A **hit** = the closing price on **{f_deadline}** lands within **±{int(f_band_pct*100)}%** of "
+                   f"\\${f_target:,.2f} (i.e. \\${lo:,.2f}–\\${hi:,.2f}). Landing at the target on the day is a "
+                   "*harder* call than ever touching it — so expect lower, more honest probabilities.")
+    else:
+        f_band_pct = None
+
     if st.button("Estimate probability", type="primary", key="f_go"):
         direction = Direction.UP if f_dir_label.startswith("UP") else Direction.DOWN
+        kind = PredictionKind.TERMINAL if is_terminal else PredictionKind.TOUCH
         try:
             with st.spinner("Fetching history, self-calibrating, and grading…"):
                 g = grade_forecast_live(
                     ticker=f_ticker, target_price=float(f_target), deadline=f_deadline,
-                    direction=direction, benchmark_symbol=(f_bench or "^GSPC").strip(),
+                    direction=direction, kind=kind, band_pct=f_band_pct,
+                    benchmark_symbol=(f_bench or "^GSPC").strip(),
                     years_history=int(f_years), as_of=date.today(),
                 )
         except LiveGradeError as e:
@@ -334,19 +360,25 @@ with tab_fcast:
         except Exception as e:  # network / library surprises -> never crash the page
             st.error(f"Couldn't grade that prediction: {e}")
         else:
-            verb = "rise to" if g.direction == Direction.UP else "fall to"
-            st.subheader(f"P({g.ticker} will {verb} ${g.target_price:,.2f} by {g.deadline}) ≈ "
-                         f"{g.probability*100:.0f}%")
+            if g.kind == PredictionKind.TERMINAL:
+                b = g.band_pct or 0.0
+                headline = (f"P({g.ticker} closes within ±{int(b*100)}% of ${g.target_price:,.2f} "
+                            f"on {g.deadline}) ≈ {g.probability*100:.0f}%")
+            else:
+                verb = "rise to" if g.direction == Direction.UP else "fall to"
+                headline = f"P({g.ticker} will {verb} ${g.target_price:,.2f} by {g.deadline}) ≈ {g.probability*100:.0f}%"
+            st.subheader(headline)
             m1, m2, m3 = st.columns(3)
             m1.metric("Calibrated probability", f"{g.probability*100:.0f}%",
                       help="The self-calibrated estimate — corrected by how this stock has actually behaved.")
             m2.metric("Raw model (uncalibrated)", f"{g.raw_probability*100:.0f}%",
-                      help="Straight from the GBM barrier model, before history-based correction.")
+                      help="Straight from the GBM model, before history-based correction.")
             m3.metric("Now → deadline", f"{g.n_days} trading days")
             if g.calibrated:
                 rec = g.self_cal_metrics.get("recalibrated", {})
-                full = g.self_cal_metrics.get("full") or g.self_cal_metrics.get("+momentum") or rec
-                ece, auc, n_test = rec.get("ece"), (full or {}).get("auc"), rec.get("n")
+                best = (g.self_cal_metrics.get("full+") or g.self_cal_metrics.get("full")
+                        or g.self_cal_metrics.get("+regime") or g.self_cal_metrics.get("+momentum") or rec)
+                ece, auc, n_test = rec.get("ece"), (best or {}).get("auc"), rec.get("n")
                 cred = f"When this model says 60%, it has historically hit ~60% on {g.ticker}"
                 if ece is not None and auc is not None:
                     cred += f" (calibration error ≈ {ece:.2f}, AUC ≈ {auc:.2f} — 0.5 is a coin flip)"
@@ -369,8 +401,10 @@ with tab_fcast:
             st.session_state.setdefault("forecasts", []).append({
                 "saved": str(g.as_of),
                 "ticker": g.ticker,
+                "type": "at-the-date" if g.kind == PredictionKind.TERMINAL else "touch-before",
                 "direction": g.direction.value,
                 "target": round(g.target_price, 2),
+                "band_±%": (int(g.band_pct * 100) if g.band_pct else None),
                 "deadline": str(g.deadline),
                 "probability_%": round(g.probability * 100),
                 "calibrated": g.calibrated,
@@ -402,9 +436,10 @@ with tab_fcast:
         def _sample_forecast():
             r = run_forecast_backtest("data/sample_historical", with_news=True,
                                       gen=ForecastGenConfig(stride_days=21))
+            order = ["base_rate", "raw", "recalibrated", "+momentum", "+regime", "+news", "full", "full+"]
             table = [{"model": k, "Brier": round(v["brier"], 4), "LogLoss": round(v["log_loss"], 4),
-                      "ECE": round(v["ece"], 4)}
-                     for k in ["base_rate", "raw", "recalibrated", "+momentum", "+news", "full"]
+                      "ECE": round(v["ece"], 4), "AUC": round(v["auc"], 3)}
+                     for k in order if k in r.metrics
                      for v in [r.metrics[k]]]
             return table, r.news_helps, r.reliability
 

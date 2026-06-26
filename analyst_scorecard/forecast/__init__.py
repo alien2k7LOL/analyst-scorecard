@@ -9,13 +9,24 @@ Same look-ahead-safe spine as the rest of the project: a probability at a date u
 to that date (price lookback + point-in-time news); the outcome uses ONLY what happened after.
 """
 
-from .prediction import Prediction, PredictionOutcome
-from .probability import GbmTouchModel, empirical_touch_probability, touch_probability
+from .prediction import Prediction, PredictionKind, PredictionOutcome
+from .probability import (
+    GbmTerminalModel,
+    GbmTouchModel,
+    empirical_terminal_probability,
+    empirical_touch_probability,
+    terminal_probability,
+    touch_probability,
+)
 
 __all__ = [
     "Prediction",
+    "PredictionKind",
     "PredictionOutcome",
     "GbmTouchModel",
+    "GbmTerminalModel",
     "touch_probability",
+    "terminal_probability",
     "empirical_touch_probability",
+    "empirical_terminal_probability",
 ]

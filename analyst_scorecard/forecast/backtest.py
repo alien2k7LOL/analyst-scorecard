@@ -28,17 +28,29 @@ import numpy as np
 from ..providers.historical_price_provider import HistoricalPriceFileProvider
 from ..providers.price_provider import PriceDataProvider, _ts
 from ..schemas import Direction
-from .calibration import LogisticCalibrator, metrics, reliability_bins
-from .features import ALL_FEATURE_NAMES, PRICE_FEATURE_NAMES, FeatureRow, build_features
+from .calibration import LogisticCalibrator, log_loss, metrics, reliability_bins
+from .features import (
+    ALL_FEATURE_NAMES,
+    ALL_PLUS_FEATURE_NAMES,
+    EXT_PRICE_FEATURE_NAMES,
+    PRICE_FEATURE_NAMES,
+    FeatureRow,
+    build_features,
+)
 from .news import NEWS_FEATURE_NAMES, NewsFileProvider, NewsProvider, NoNewsProvider
-from .prediction import Prediction, PredictionOutcome
+from .prediction import Prediction, PredictionKind, PredictionOutcome
 
+# Candidate recalibration feature sets, smallest to richest. ``raw`` is special-cased (the GBM
+# probability passed straight through); every other set is fit as a logistic layer and the deployed
+# model is chosen by held-out VALIDATION performance — never by the test span.
 FEATURE_SETS: dict[str, Optional[list[str]]] = {
-    "raw": None,  # special-cased: use the GBM probability directly
+    "raw": None,
     "recalibrated": ["gbm_logit"],
     "+momentum": PRICE_FEATURE_NAMES,
+    "+regime": PRICE_FEATURE_NAMES + EXT_PRICE_FEATURE_NAMES,
     "+news": ["gbm_logit"] + NEWS_FEATURE_NAMES,
     "full": ALL_FEATURE_NAMES,
+    "full+": ALL_PLUS_FEATURE_NAMES,
 }
 
 
@@ -47,8 +59,23 @@ FEATURE_SETS: dict[str, Optional[list[str]]] = {
 # --------------------------------------------------------------------------------------
 
 
+def _terminal_hit(terminal_price: float, pred: Prediction) -> bool:
+    """Did the price END the window at/near the target, per the prediction's terminal rule?"""
+    if pred.band_pct is not None:
+        lo, hi = pred.target_price * (1 - pred.band_pct), pred.target_price * (1 + pred.band_pct)
+        return bool(lo <= terminal_price <= hi)
+    if pred.direction == Direction.UP:
+        return bool(terminal_price >= pred.target_price)
+    return bool(terminal_price <= pred.target_price)
+
+
 def resolve_outcome(price_provider: PriceDataProvider, pred: Prediction) -> Optional[PredictionOutcome]:
-    """Did the price touch the target over (as_of, deadline]? Uses ONLY prices in that window."""
+    """Ground-truth a prediction using ONLY prices in (as_of, deadline].
+
+    TOUCH    — hit if the path reaches the target at any point in the window.
+    TERMINAL — hit if the close ON the deadline trading day satisfies the band / at-or-through rule.
+               This looks only AT the deadline price (never past it), so it stays look-ahead-safe.
+    """
     series = price_provider.price_series(pred.ticker)
     asof, deadline = _ts(pred.as_of), _ts(pred.deadline)
     past = series.loc[:asof]
@@ -56,19 +83,23 @@ def resolve_outcome(price_provider: PriceDataProvider, pred: Prediction) -> Opti
         return None
     asof_actual, asof_price = past.index[-1], float(past.iloc[-1])
     forward = series.loc[asof_actual:deadline]
-    after = forward.iloc[1:]  # strictly AFTER the as_of day — a touch must occur post-prediction
+    after = forward.iloc[1:]  # strictly AFTER the as_of day — resolution must occur post-prediction
     if len(after) < 1:
         return None
 
     vals = after.to_numpy(dtype=float)
-    if pred.direction == Direction.UP:
-        extreme = float(vals.max())
-        hit_mask = vals >= pred.target_price
+    extreme = float(vals.max()) if pred.direction == Direction.UP else float(vals.min())
+    # The deadline-day close (last trading day on/before the deadline) — what resolves a terminal call.
+    terminal_price = float(after.iloc[-1])
+    terminal_date = after.index[-1].date()
+
+    if pred.kind == PredictionKind.TERMINAL:
+        hit = _terminal_hit(terminal_price, pred)
+        hit_date = terminal_date if hit else None
     else:
-        extreme = float(vals.min())
-        hit_mask = vals <= pred.target_price
-    hit = bool(hit_mask.any())
-    hit_date = after.index[np.argmax(hit_mask)].date() if hit else None
+        hit_mask = vals >= pred.target_price if pred.direction == Direction.UP else vals <= pred.target_price
+        hit = bool(hit_mask.any())
+        hit_date = after.index[int(np.argmax(hit_mask))].date() if hit else None
 
     return PredictionOutcome(
         prediction_id=pred.prediction_id,
@@ -77,6 +108,8 @@ def resolve_outcome(price_provider: PriceDataProvider, pred: Prediction) -> Opti
         as_of_price=asof_price,
         extreme_price=extreme,
         n_observations=int(len(forward)),
+        terminal_price=terminal_price,
+        terminal_date=terminal_date,
     )
 
 
@@ -93,6 +126,17 @@ class ForecastGenConfig:
     down_offsets: tuple[float, ...] = (0.08, 0.15)
     lookback_days: int = 252
     min_history: int = 126              # require this many observations before as_of
+    # What kind(s) of prediction to manufacture. Default is touch-only (back-compat). The big
+    # training run also generates TERMINAL predictions; ``terminal_bands`` lists the ± tolerance
+    # bands to use (None = an "at or through the target on the deadline" terminal call).
+    kinds: tuple[PredictionKind, ...] = (PredictionKind.TOUCH,)
+    terminal_bands: tuple[Optional[float], ...] = (0.03,)
+
+
+def _band_tag(kind: PredictionKind, band: Optional[float]) -> str:
+    if kind == PredictionKind.TOUCH:
+        return "TCH"
+    return f"TRMb{int(band * 100)}" if band is not None else "TRMthru"
 
 
 def generate_predictions(
@@ -101,6 +145,12 @@ def generate_predictions(
     preds: list[Prediction] = []
     tickers = list(tickers) if tickers is not None else price_provider.tickers()
     horizon_max = max(gen.horizons)
+    # For each kind, the (band,) variants to emit. Touch ignores bands (one variant, band=None).
+    kind_variants = [
+        (k, b)
+        for k in gen.kinds
+        for b in (gen.terminal_bands if k == PredictionKind.TERMINAL else (None,))
+    ]
     for tk in tickers:
         idx = price_provider.price_series(tk).index
         vals = price_provider.price_series(tk).to_numpy(dtype=float)
@@ -112,16 +162,20 @@ def generate_predictions(
                 if j >= len(idx):
                     continue
                 deadline = idx[j]
-                for off in gen.up_offsets:
-                    preds.append(Prediction(
-                        prediction_id=f"{tk}|{as_of.date()}|{h}|U{int(off*100)}",
-                        ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 + off), 4),
-                        deadline=deadline.date(), direction=Direction.UP, made_by="backtest"))
-                for off in gen.down_offsets:
-                    preds.append(Prediction(
-                        prediction_id=f"{tk}|{as_of.date()}|{h}|D{int(off*100)}",
-                        ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 - off), 4),
-                        deadline=deadline.date(), direction=Direction.DOWN, made_by="backtest"))
+                for kind, band in kind_variants:
+                    tag = _band_tag(kind, band)
+                    for off in gen.up_offsets:
+                        preds.append(Prediction(
+                            prediction_id=f"{tk}|{as_of.date()}|{h}|U{int(off*100)}|{tag}",
+                            ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 + off), 4),
+                            deadline=deadline.date(), direction=Direction.UP,
+                            kind=kind, band_pct=band, made_by="backtest"))
+                    for off in gen.down_offsets:
+                        preds.append(Prediction(
+                            prediction_id=f"{tk}|{as_of.date()}|{h}|D{int(off*100)}|{tag}",
+                            ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 - off), 4),
+                            deadline=deadline.date(), direction=Direction.DOWN,
+                            kind=kind, band_pct=band, made_by="backtest"))
     return preds
 
 
@@ -137,15 +191,17 @@ class ForecastBacktestResult:
     n_test: int
     split_date: Optional[date]
     test_base_rate: float
-    metrics: dict[str, dict]            # feature-set name -> {brier, log_loss, ece, n}
-    reliability: list                   # reliability bins for the 'full' model on test
+    metrics: dict[str, dict]            # feature-set name -> {brier, log_loss, ece, auc, bss, n}
+    reliability: list                   # reliability bins for the DEPLOYED (selected) model on test
     news_helps: bool
     has_news: bool
     deployed_feature_set: list[str]
+    selected_name: str = "recalibrated"  # which candidate set won on the validation span
+    selected_metrics: dict = field(default_factory=dict)  # that set's held-out TEST metrics
     _deployed: Optional[LogisticCalibrator] = field(default=None, repr=False)
 
     def predict_one(self, row: FeatureRow) -> float:
-        """Calibrated touch probability for a single new prediction (uses the deployed model)."""
+        """Calibrated probability for a single new prediction (uses the deployed model)."""
         if self._deployed is None:
             return float(row.gbm_p)
         return float(self._deployed.predict([row])[0])
@@ -169,6 +225,19 @@ class ForecastBacktest:
         self.l2 = l2
         self.tickers = tickers
 
+    def _candidate_sets(self) -> dict[str, list[str]]:
+        """Feature sets to evaluate/select among — news-based ones only when news is available."""
+        cands: dict[str, list[str]] = {
+            "recalibrated": ["gbm_logit"],
+            "+momentum": PRICE_FEATURE_NAMES,
+            "+regime": PRICE_FEATURE_NAMES + EXT_PRICE_FEATURE_NAMES,
+        }
+        if self.has_news:
+            cands["+news"] = ["gbm_logit"] + NEWS_FEATURE_NAMES
+            cands["full"] = ALL_FEATURE_NAMES
+            cands["full+"] = ALL_PLUS_FEATURE_NAMES
+        return cands
+
     def _collect(self) -> tuple[list[FeatureRow], list[float]]:
         rows: list[FeatureRow] = []
         ys: list[float] = []
@@ -183,6 +252,36 @@ class ForecastBacktest:
             rows.append(row)
             ys.append(1.0 if outcome.hit else 0.0)
         return rows, ys
+
+    def _select_on_validation(
+        self, train_rows: list[FeatureRow], ytr: list[float], candidates: dict[str, list[str]]
+    ) -> str:
+        """Pick the feature set with the best log-loss on a validation span carved from TRAIN by time.
+
+        Selecting on a held-out validation span (not the test span) is what keeps 'pick the most
+        accurate model' honest — the reported test metrics never influence which model we deploy.
+        """
+        default = "full+" if self.has_news else "+regime"
+        as_ofs = sorted({r.as_of for r in train_rows})
+        if len(as_ofs) < 6:
+            return default
+        cut = as_ofs[int(len(as_ofs) * 0.7)]
+        fit = [(r, y) for r, y in zip(train_rows, ytr) if r.deadline <= cut]
+        val = [(r, y) for r, y in zip(train_rows, ytr) if r.as_of > cut]
+        if len(fit) < 20 or len(val) < 20:
+            return default
+        fr, fy = [r for r, _ in fit], [y for _, y in fit]
+        vr, vy = [r for r, _ in val], [y for _, y in val]
+        best, best_ll = default, float("inf")
+        for name, fs in candidates.items():
+            try:
+                cal = LogisticCalibrator(fs, l2=self.l2).fit(fr, fy)
+                ll = log_loss(vy, cal.predict(vr))
+            except (ValueError, np.linalg.LinAlgError):
+                continue
+            if ll < best_ll:
+                best, best_ll = name, ll
+        return best
 
     def run(self) -> ForecastBacktestResult:
         rows, ys = self._collect()
@@ -200,29 +299,32 @@ class ForecastBacktest:
         test_rows, yte = [r for r, _ in test], [y for _, y in test]
         base_rate = float(np.mean(yte))
 
+        candidates = self._candidate_sets()
         results: dict[str, dict] = {"base_rate": metrics(yte, [base_rate] * len(yte))}
         results["raw"] = metrics(yte, [r.gbm_p for r in test_rows])
-        reliability: list = []
-        for name, fs in FEATURE_SETS.items():
-            if fs is None:
-                continue
+        test_preds: dict[str, np.ndarray] = {}
+        for name, fs in candidates.items():
             cal = LogisticCalibrator(fs, l2=self.l2).fit(train_rows, ytr)
             pte = cal.predict(test_rows)
+            test_preds[name] = pte
             results[name] = metrics(yte, pte)
-            if name == "full":
-                reliability = reliability_bins(yte, pte)
 
         news_helps = self.has_news and (results["+news"]["log_loss"] < results["recalibrated"]["log_loss"])
 
-        # Deploy: refit the best honest feature set on ALL history for live use.
-        deployed_fs = ALL_FEATURE_NAMES if self.has_news else PRICE_FEATURE_NAMES
-        deployed = LogisticCalibrator(deployed_fs, l2=self.l2).fit(rows, ys)
+        # Honest selection: choose the deployed feature set by VALIDATION log-loss (carved from train).
+        selected = self._select_on_validation(train_rows, ytr, candidates)
+        reliability = reliability_bins(yte, test_preds[selected])
+        selected_fs = candidates[selected]
+
+        # Deploy: refit the selected feature set on ALL history for live use.
+        deployed = LogisticCalibrator(selected_fs, l2=self.l2).fit(rows, ys)
 
         return ForecastBacktestResult(
             n_predictions=len(rows), n_train=len(train_rows), n_test=len(test_rows),
             split_date=split_date, test_base_rate=base_rate, metrics=results,
             reliability=reliability, news_helps=news_helps, has_news=self.has_news,
-            deployed_feature_set=deployed_fs, _deployed=deployed,
+            deployed_feature_set=selected_fs, selected_name=selected,
+            selected_metrics=results[selected], _deployed=deployed,
         )
 
 

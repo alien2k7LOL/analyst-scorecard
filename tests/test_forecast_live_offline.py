@@ -12,6 +12,7 @@ import pandas as pd
 import pytest
 
 from analyst_scorecard.forecast.live import grade_forecast_live
+from analyst_scorecard.forecast.prediction import PredictionKind
 from analyst_scorecard.providers.live_web_price_provider import LiveGradeError, PriceFetcher
 from analyst_scorecard.schemas import Direction
 
@@ -64,6 +65,28 @@ def test_direction_matters(frame):
     down = grade_forecast_live(ticker="AAA", target_price=70.0, deadline=AS_OF + timedelta(days=120),
                                direction=Direction.DOWN, as_of=AS_OF, fetcher=FrameFetcher(frame))
     assert up.probability != down.probability  # different targets/directions -> different odds
+
+
+def test_terminal_mode_self_calibrates_and_is_band_aware(frame):
+    # Terminal grading: lands within ±band of the target ON the deadline. Self-calibration must train
+    # on terminal outcomes (the same question), and a wider band must never be less likely.
+    common = dict(ticker="AAA", target_price=120.0, deadline=AS_OF + timedelta(days=180),
+                  direction=Direction.UP, as_of=AS_OF, kind=PredictionKind.TERMINAL,
+                  fetcher=FrameFetcher(frame))
+    narrow = grade_forecast_live(**{**common, "band_pct": 0.02})
+    wide = grade_forecast_live(**{**common, "band_pct": 0.10})
+    assert narrow.kind == PredictionKind.TERMINAL and narrow.band_pct == 0.02
+    assert narrow.calibrated is True and 0.0 <= narrow.probability <= 1.0
+    assert wide.raw_probability >= narrow.raw_probability   # wider band can only help (raw model)
+
+
+def test_terminal_is_not_more_likely_than_touch_live(frame):
+    common = dict(ticker="AAA", target_price=125.0, deadline=AS_OF + timedelta(days=150),
+                  direction=Direction.UP, as_of=AS_OF, fetcher=FrameFetcher(frame))
+    touch = grade_forecast_live(**common, kind=PredictionKind.TOUCH)
+    terminal = grade_forecast_live(**common, kind=PredictionKind.TERMINAL, band_pct=0.03)
+    # Ending in a tight band around the level is rarer than ever touching it (raw, model-level fact).
+    assert terminal.raw_probability < touch.raw_probability
 
 
 def test_short_history_falls_back_to_raw():

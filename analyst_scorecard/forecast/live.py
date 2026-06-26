@@ -25,7 +25,7 @@ from ..providers.live_web_price_provider import LiveGradeError, PriceFetcher, YF
 from ..schemas import Direction
 from .backtest import ForecastBacktest, ForecastGenConfig
 from .features import build_features
-from .prediction import Prediction
+from .prediction import Prediction, PredictionKind
 
 DEFAULT_BENCHMARK = "^GSPC"
 
@@ -39,9 +39,11 @@ class ForecastGrade:
     deadline: date
     n_days: int
     s0: float
-    raw_probability: float          # closed-form GBM touch probability (uncalibrated)
+    raw_probability: float          # closed-form GBM probability for this kind (uncalibrated)
     probability: float              # calibrated if possible, else == raw_probability
     calibrated: bool
+    kind: PredictionKind = PredictionKind.TOUCH
+    band_pct: Optional[float] = None
     self_cal_metrics: dict = field(default_factory=dict)  # held-out test metrics of the self-cal model
     reliability: list = field(default_factory=list)
     benchmark_symbol: str = DEFAULT_BENCHMARK
@@ -55,6 +57,8 @@ def grade_forecast_live(
     target_price: float,
     deadline: date,
     direction: Direction | str,
+    kind: PredictionKind | str = PredictionKind.TOUCH,
+    band_pct: Optional[float] = None,
     as_of: Optional[date] = None,
     benchmark_symbol: str = DEFAULT_BENCHMARK,
     years_history: int = 6,
@@ -64,6 +68,7 @@ def grade_forecast_live(
     fetcher = fetcher or YFinanceFetcher()
     as_of = as_of or date.today()
     direction = direction if isinstance(direction, Direction) else Direction(direction)
+    kind = kind if isinstance(kind, PredictionKind) else PredictionKind(kind)
     if direction == Direction.FLAT:
         raise LiveGradeError("Pick a direction: UP (rises to target) or DOWN (falls to target).")
     ticker = ticker.strip().upper()
@@ -73,6 +78,8 @@ def grade_forecast_live(
         raise LiveGradeError("Target price must be greater than 0.")
     if deadline <= as_of:
         raise LiveGradeError(f"The deadline {deadline} must be in the future (after {as_of}).")
+    # Band only applies to terminal predictions; an empty band means "at or through the target".
+    band_pct = (float(band_pct) if band_pct else None) if kind == PredictionKind.TERMINAL else None
 
     start = as_of - timedelta(days=int(365.25 * years_history))
     frame = fetcher.fetch([ticker, benchmark_symbol], start, as_of)
@@ -89,16 +96,22 @@ def grade_forecast_live(
         target_price=float(target_price),
         deadline=deadline,
         direction=direction,
+        kind=kind,
+        band_pct=band_pct,
     )
     row = build_features(provider, pred)  # price-only; lookback ends at as_of (look-ahead-safe)
     raw_p = row.gbm_p
 
-    # Self-calibrate on this ticker's own history (price-only). Falls back to raw if too short.
+    # Self-calibrate on this ticker's own history, matching the SAME kind/band the user predicted (so
+    # the calibrator is trained on the question being asked) and including the actual horizon. Price-
+    # only; falls back to the raw model if there isn't enough resolvable history.
     probability, calibrated, metrics, reliability = raw_p, False, {}, []
     try:
+        horizons = tuple(sorted({63, 126, max(5, int(row.n_days))}))
         gen = ForecastGenConfig(
-            stride_days=15, horizons=(63, 126),
+            stride_days=15, horizons=horizons,
             up_offsets=(0.05, 0.10, 0.20), down_offsets=(0.05, 0.10, 0.20),
+            kinds=(kind,), terminal_bands=(band_pct,),
         )
         bt = ForecastBacktest(provider, news_provider=None, gen=gen, tickers=[ticker], l2=l2).run()
         probability, calibrated, metrics, reliability = bt.predict_one(row), True, bt.metrics, bt.reliability
@@ -110,6 +123,7 @@ def grade_forecast_live(
         ticker=ticker, direction=direction, target_price=float(target_price),
         as_of=row.as_of, deadline=deadline, n_days=row.n_days, s0=row.s0,
         raw_probability=raw_p, probability=float(probability), calibrated=calibrated,
+        kind=kind, band_pct=band_pct,
         self_cal_metrics=metrics, reliability=reliability, benchmark_symbol=benchmark_symbol,
         history_start=idx.min().date(), history_end=idx.max().date(),
     )
