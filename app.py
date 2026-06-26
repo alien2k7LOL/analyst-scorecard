@@ -14,12 +14,18 @@ Two tabs:
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import streamlit as st
 
 from analyst_scorecard.backtest import SAMPLE_DATA_DIR, run_backtest
 from analyst_scorecard.config import DEFAULT_CONFIG
+from analyst_scorecard.providers.live_web_price_provider import (
+    LiveGradeError,
+    grade_live_prediction,
+)
+from analyst_scorecard.schemas import Rating
 from analyst_scorecard.verdicts import default_verdict_generator
 from analyst_scorecard.viz import (
     build_dashboard,
@@ -80,7 +86,9 @@ def _profile_block(score, verdict_text: str):
     st.pyplot(plot_analyst_profile(score))
 
 
-tab_syn, tab_hist = st.tabs(["🧪 Synthetic engine demo", "📜 Historical back-test"])
+tab_syn, tab_hist, tab_live = st.tabs(
+    ["🧪 Synthetic engine demo", "📜 Historical back-test", "🛰️ Live Grader"]
+)
 
 # ===== Tab 1: synthetic ===============================================================
 with tab_syn:
@@ -146,3 +154,85 @@ with tab_hist:
                 )
             if result.ingest_issues:
                 st.dataframe(result.ingest_issues, use_container_width=True, hide_index=True)
+
+# ===== Tab 3: live grader =============================================================
+with tab_live:
+    st.header("Live Grader — grade a prediction against today's market")
+    st.caption(
+        "Fetches **real** adjusted daily prices via `yfinance` and runs your prediction through the "
+        "*same* look-ahead-safe funnel. Needs internet + the optional `yfinance` package "
+        "(`.venv/bin/pip install -r requirements-live.txt`)."
+    )
+    st.warning(
+        "A call whose horizon hasn't elapsed is graded **PROVISIONAL** — a mark-to-market read "
+        "*so far*, not a final score. And because it uses live prices, a live grade is a "
+        "point-in-time snapshot: **not reproducible** like the back-test."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    live_ticker = c1.text_input("Ticker", value="AAPL", key="live_ticker")
+    live_rating = c2.selectbox("Rating", [r.value for r in Rating], index=0, key="live_rating")
+    live_target = c3.number_input("Price target ($)", min_value=0.01, value=250.0, step=1.0, key="live_target")
+
+    c4, c5, c6 = st.columns(3)
+    live_call_date = c4.date_input(
+        "Call date (must be in the past)", value=date(2025, 1, 2), max_value=date.today(), key="live_call_date"
+    )
+    live_benchmark = c5.text_input("Benchmark symbol", value="^GSPC", key="live_benchmark")
+    horizon_mode = c6.radio("Horizon", ["Open-ended (so far)", "By deadline date"], key="live_hmode")
+
+    live_deadline = None
+    if horizon_mode == "By deadline date":
+        live_deadline = st.date_input(
+            "Original deadline (the call's resolution date)", value=date.today(), key="live_deadline"
+        )
+
+    if st.button("Grade Live Prediction", type="primary", key="live_go"):
+        try:
+            with st.spinner("Fetching live market data and grading…"):
+                result = grade_live_prediction(
+                    ticker=live_ticker,
+                    rating=live_rating,
+                    target_price=float(live_target),
+                    call_date=live_call_date,
+                    resolution_date=live_deadline,
+                    benchmark_symbol=(live_benchmark or "^GSPC").strip(),
+                    asof=date.today(),
+                )
+        except LiveGradeError as e:
+            st.error(str(e))
+        except Exception as e:  # network / library surprises -> never crash the page
+            st.error(f"Couldn't grade that prediction: {e}")
+        else:
+            badge = st.warning if result.provisional else st.success
+            through = "the deadline" if not result.provisional else "the latest available trading day"
+            badge(
+                f"**{result.status}** — graded from {result.call.call_date} through "
+                f"{result.graded_through} ({through}). Live snapshot; not reproducible."
+            )
+            st.info(f"**Verdict:** {result.verdict}")
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Beat-the-Market", "—" if result.beat_market is None else f"{result.beat_market*100:+.1f}%")
+            m2.metric("Direction gate", "PASS ✅" if result.call_score.direction_pass else "FAIL ❌")
+            m3.metric("Accuracy", "—" if result.call_score.accuracy is None else f"{result.call_score.accuracy:.3f}")
+
+            r = result.resolution
+            st.caption("Exact prices used to resolve it (full traceability — nothing past the grading date):")
+            st.dataframe(
+                [{
+                    "Ticker": result.call.ticker,
+                    "Rating": result.call.rating.value,
+                    "Benchmark": result.benchmark_symbol,
+                    "Call date": r.call_date.isoformat(),
+                    "Graded through": r.resolution_date.isoformat(),
+                    "Call price": round(r.call_price, 2),
+                    "Target": round(r.target_price, 2),
+                    "Actual price": round(r.actual_price, 2),
+                    "Stock return": f"{r.stock_return*100:+.1f}%",
+                    "Benchmark return": f"{r.benchmark_return*100:+.1f}%",
+                    "Beat": "—" if result.call_score.beat is None else f"{result.call_score.beat*100:+.1f}%",
+                }],
+                use_container_width=True, hide_index=True,
+            )
+            st.pyplot(plot_analyst_profile(result.analyst_score))

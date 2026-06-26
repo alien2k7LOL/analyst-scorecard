@@ -1,0 +1,4 @@
+# OPTIONAL — only needed for the Live Grader tab (app.py → 🛰️ Live Grader).
+# The core scorecard, back-test, CLIs, website, and tests all run WITHOUT this.
+# Install into the project venv:  .venv/bin/pip install -r requirements-live.txt
+yfinance>=0.2.40

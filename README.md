@@ -292,6 +292,36 @@ Proven in [`tests/test_backtest_phaseE_lookahead.py`](tests/test_backtest_phaseE
 - **Delisted-to-zero calls are skipped, not scored** — conservative (never invents a price), but it
   lets a pick that blew up and got delisted escape a deserved bad mark.
 
+## Live Grader — grade a prediction against today's market
+
+The **🛰️ Live Grader** tab (`app.py`) grades a brand-new prediction against *real* market data
+pulled live via `yfinance`, through the **exact same** look-ahead-safe funnel. Two honest caveats
+are built into the design and surfaced in the UI:
+
+- **PROVISIONAL vs FINAL.** A prediction whose horizon hasn't elapsed yet can only be graded
+  *so far* — a mark-to-market interim read, not the resolved score. The grader labels it
+  `PROVISIONAL`; only a call whose deadline has already passed is graded `FINAL` (and pinned to
+  the deadline, never to "today").
+- **Not reproducible.** A live grade depends on live prices and the day you ran it, so it is a
+  point-in-time snapshot — deliberately kept *separate* from the reproducible back-test, never
+  folded into it.
+
+Look-ahead safety still holds: the grade is computed from a `PriceWindow` that ends at the grading
+date, and no price after it is ever fetched or read (proved in
+[`tests/test_live_grader_offline.py`](tests/test_live_grader_offline.py), which injects a synthetic
+frame so the provider→resolve→score path is verified with no network).
+
+Why `yfinance` and not a search-engine scrape: the engine needs the **daily series** of both the
+stock *and* the benchmark across the window (to get the entry price, returns, and realized vol). A
+scraped *spot* price is one number that can't resolve a call at all — so the live source is
+[`LiveWebPriceProvider`](analyst_scorecard/providers/live_web_price_provider.py), a
+`PriceDataProvider` backed by `yfinance`'s adjusted daily history.
+
+```bash
+.venv/bin/pip install -r requirements-live.txt   # optional dep — core runs without it
+.venv/bin/streamlit run app.py                   # → 🛰️ Live Grader tab
+```
+
 ## Prioritized next steps (going live on top of the historical base)
 
 1. **Wire a real, continuously-updating price provider** (market-data API / yfinance) behind the
