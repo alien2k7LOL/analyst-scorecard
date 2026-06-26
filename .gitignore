@@ -31,3 +31,11 @@ site/
 
 # UX-audit scratch (evidence notes + driver scripts)
 .audit/
+
+# Generated evaluation artifacts (regenerate with `python -m evaluation.extraction_eval`)
+evaluation/figures/
+evaluation/REPORT.md
+evaluation/FORECAST_REPORT.md
+
+# Ingested analyst-call dataset (regenerate with `python -m analyst_scorecard.ingest.pipeline`)
+data/analyst_calls.jsonl
