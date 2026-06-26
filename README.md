@@ -322,6 +322,48 @@ scraped *spot* price is one number that can't resolve a call at all — so the l
 .venv/bin/streamlit run app.py                   # → 🛰️ Live Grader tab
 ```
 
+## Forecast & calibration — probability that a FUTURE prediction comes true
+
+Where the scorecard grades calls *after* the fact, the **🔮 Forecast** tab (and the
+`analyst_scorecard.forecast` package) grades them *before*: given (ticker, target, deadline,
+direction) it estimates the probability the price **touches the target by the deadline**, and
+backtests that probability on history to measure and refine its **calibration**.
+
+How it works, on the same look-ahead-safe spine:
+
+1. **Touch probability** — a closed-form GBM barrier-hitting model (`probability.py`), validated
+   against Monte Carlo. The raw model assumes continuous monitoring, so it's *mis-calibrated* on
+   daily closes — which the backtest then corrects.
+2. **Look-ahead-safe inputs** — the price `LookbackWindow` ends exactly at `as_of` and the
+   point-in-time `NewsWindow` holds only articles dated on/before `as_of`; both *raise* if handed
+   future data (proved in [`tests/test_forecast_lookahead.py`](tests/test_forecast_lookahead.py)).
+3. **Calibration backtest** (`backtest.py`) — manufactures thousands of (ticker, as_of, horizon,
+   target) predictions from history, scores each with only pre-`as_of` data, resolves the actual
+   touch, splits by time (train fully resolved *before* any test prediction), fits a logistic
+   recalibration layer on train, and reports Brier / log-loss / ECE on held-out test for: `raw` →
+   `recalibrated` → `+momentum` → `+news` → `full`. **News is credited only if it beats the
+   price-only model on data it never saw.** On the sample, recalibration cuts ECE from ~0.10 to
+   ~0.03 and point-in-time news lowers held-out log-loss further.
+4. **Live grading** (`live.py`) — fetches real history via `yfinance` and **self-calibrates on the
+   ticker's own past** before grading your prediction (price-only; see the news note below).
+
+```bash
+python -m analyst_scorecard.forecast.cli              # the sample calibration report (with news)
+python -m analyst_scorecard.forecast.cli --no-news    # ablate news to see its contribution
+```
+
+Honest caveats, surfaced in the UI:
+
+- **A calibrated estimate, not a crystal ball.** Markets are near-efficient; the value is a
+  *well-calibrated* probability (validated on history), never a guarantee.
+- **News is point-in-time, and price-only when live.** Trustworthy historical point-in-time news
+  isn't freely available, so the *live* path is price-only; the *value* of news is demonstrated on
+  the offline sample, where the feed is synthetic but correctly timestamped. The sample news is
+  ground-truth construction (like the seeded prices) — the engine still only ever reads news dated
+  ≤ `as_of`.
+- **Direction-oriented features.** Sentiment/trend features are oriented to the predicted direction
+  (a bullish signal helps an UP-touch and hurts a DOWN-touch); without that, the effect cancels.
+
 ## Prioritized next steps (going live on top of the historical base)
 
 1. **Wire a real, continuously-updating price provider** (market-data API / yfinance) behind the
