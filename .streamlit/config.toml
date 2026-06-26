@@ -1,0 +1,8 @@
+# Pin a dark theme so the app background is deterministic and the (now dark-styled,
+# transparent) matplotlib charts always sit cleanly on it — no more white chart boxes.
+[theme]
+base = "dark"
+primaryColor = "#4c9be8"
+backgroundColor = "#0e1117"
+secondaryBackgroundColor = "#1a2029"
+textColor = "#e6e9ef"

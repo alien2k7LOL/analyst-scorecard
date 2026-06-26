@@ -14,18 +14,22 @@ Two tabs:
 
 from __future__ import annotations
 
-from datetime import date
+import json
+from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
 import streamlit as st
 
 from analyst_scorecard.backtest import SAMPLE_DATA_DIR, run_backtest
 from analyst_scorecard.config import DEFAULT_CONFIG
+from analyst_scorecard.forecast.backtest import ForecastGenConfig, run_forecast_backtest
+from analyst_scorecard.forecast.live import grade_forecast_live
 from analyst_scorecard.providers.live_web_price_provider import (
     LiveGradeError,
     grade_live_prediction,
 )
-from analyst_scorecard.schemas import Rating
+from analyst_scorecard.schemas import Direction, Rating
 from analyst_scorecard.verdicts import default_verdict_generator
 from analyst_scorecard.viz import (
     build_dashboard,
@@ -33,6 +37,7 @@ from analyst_scorecard.viz import (
     leaderboard_dataframe,
     plot_analyst_profile,
     plot_leaderboard,
+    plot_reliability,
     save_dashboard_pngs,
 )
 
@@ -44,20 +49,58 @@ st.caption(
     "**beat-the-market**: would you have done better just buying the index?"
 )
 
+with st.expander("🧭 New here? What this is & how to read it"):
+    st.markdown(
+        "- **What it does:** grades stock-call track records *and* your own forward predictions "
+        "**honestly** — the engine never peeks at the future (look-ahead-safe and reproducible).\n"
+        "- **Beat-the-Market** (the headline): mean excess return vs the index. **+40.5%** means "
+        "following the calls beat just buying the index by 40.5 points; **negative** means it lagged.\n"
+        "- **Direction Hit-Rate:** how often the up/down call was right. **Accuracy:** how close the "
+        "price target landed (1.0 = bullseye).\n"
+        "- **Where to start:** the **🔮 Forecast** tab grades *your own* prediction (type a ticker + a "
+        "target). The first two tabs prove the method is fair on data whose outcomes are already known."
+    )
+
 _LB_COLS = {
-    "Beat-Market": st.column_config.NumberColumn(format="%.2f%%", help="Mean excess return vs index"),
-    "Direction Hit-Rate": st.column_config.NumberColumn(format="%.0f%%"),
-    "Accuracy": st.column_config.NumberColumn(format="%.3f"),
+    "Beat-Market": st.column_config.NumberColumn(
+        format="%+.1f%%",
+        help="The headline: mean excess return vs the index. Positive = following the calls beat the market.",
+    ),
+    "Direction Hit-Rate": st.column_config.NumberColumn(
+        format="%.0f%%", help="How often the up/down call was correct."
+    ),
+    "Accuracy": st.column_config.NumberColumn(
+        format="%.3f",
+        help="Volatility-scaled closeness of target to reality (1.0 = bullseye); blank when no directional calls passed the gate.",
+    ),
 }
 
+
+def _leaderboard_for_display(leaderboard):
+    """Leaderboard dataframe with the two rate columns scaled to PERCENT (0.405 -> 40.5).
+
+    Fixes the headline bug where column_config's '%%' format appended a sign to a FRACTION, so
+    +40.5% rendered as '0.41%' and an 85% hit-rate as '1%'. Scaling here keeps numeric sorting.
+    """
+    df = leaderboard_dataframe(leaderboard).copy()
+    for col in ("Beat-Market", "Direction Hit-Rate"):
+        df[col] = pd.to_numeric(df[col], errors="coerce") * 100.0
+    return df
+
 # Sidebar -----------------------------------------------------------------------------
-seed = st.sidebar.number_input("Price-world seed (synthetic)", value=DEFAULT_CONFIG.seed, step=1)
+st.sidebar.header("⚙️ Settings")
+seed = st.sidebar.number_input(
+    "Price-world seed (synthetic)", value=DEFAULT_CONFIG.seed, step=1,
+    help="Reseeds the synthetic price world on the demo tab. Doesn't affect the real-data tabs.",
+)
 config = DEFAULT_CONFIG.with_overrides(seed=int(seed))
 if st.sidebar.button("Save synthetic charts as PNG"):
     paths = save_dashboard_pngs(config=config)
     st.sidebar.success("Saved:\n" + "\n".join(p.name for p in paths))
 st.sidebar.divider()
-data_dir = st.sidebar.text_input("Historical data folder", value=str(SAMPLE_DATA_DIR))
+with st.sidebar.expander("Advanced: use your own data"):
+    st.caption("Most people can leave this as-is — it defaults to the bundled sample.")
+    data_dir = st.text_input("Historical data folder", value=str(SAMPLE_DATA_DIR))
 
 
 @st.cache_data(show_spinner=False)
@@ -80,14 +123,17 @@ def _load_backtest(folder: str):
 def _profile_block(score, verdict_text: str):
     st.info(f"**Verdict:** {verdict_text}")
     c1, c2, c3 = st.columns(3)
-    c1.metric("Beat-the-Market", "—" if score.beat_market is None else f"{score.beat_market*100:+.1f}%")
-    c2.metric("Direction Hit-Rate", f"{score.direction_hit_rate*100:.0f}%")
-    c3.metric("Accuracy", "—" if score.mean_accuracy is None else f"{score.mean_accuracy:.3f}")
-    st.pyplot(plot_analyst_profile(score))
+    c1.metric("Beat-the-Market", "—" if score.beat_market is None else f"{score.beat_market*100:+.1f}%",
+              help="Mean excess return vs the index across this analyst's directional calls. Positive = added value over just buying the index.")
+    c2.metric("Direction Hit-Rate", f"{score.direction_hit_rate*100:.0f}%",
+              help="How often the up/down call was correct.")
+    c3.metric("Accuracy", "—" if score.mean_accuracy is None else f"{score.mean_accuracy:.3f}",
+              help="Volatility-scaled closeness of the target to reality (1.0 = bullseye).")
+    st.pyplot(plot_analyst_profile(score, dark=True))
 
 
-tab_syn, tab_hist, tab_live = st.tabs(
-    ["🧪 Synthetic engine demo", "📜 Historical back-test", "🛰️ Live Grader"]
+tab_syn, tab_hist, tab_live, tab_fcast = st.tabs(
+    ["🧪 Synthetic engine demo", "📜 Historical back-test", "🛰️ Live Grader", "🔮 Forecast"]
 )
 
 # ===== Tab 1: synthetic ===============================================================
@@ -95,8 +141,9 @@ with tab_syn:
     data, verdicts = _load_synthetic(int(seed))
 
     st.header("Leaderboard — ranked by Beat-the-Market")
-    st.dataframe(leaderboard_dataframe(data.leaderboard), use_container_width=True, hide_index=True, column_config=_LB_COLS)
-    st.pyplot(plot_leaderboard(data.leaderboard))
+    st.caption("This is the offline demo: each row is a **fictional** analyst, and the engine grades their past calls. No real securities or people.")
+    st.dataframe(_leaderboard_for_display(data.leaderboard), use_container_width=True, hide_index=True, column_config=_LB_COLS)
+    st.pyplot(plot_leaderboard(data.leaderboard, dark=True))
 
     st.header("Analyst Profile")
     syn_names = {s.analyst_name: aid for aid, s in data.scores_by_id.items()}
@@ -110,11 +157,16 @@ with tab_syn:
 
 # ===== Tab 2: historical ==============================================================
 with tab_hist:
+    st.caption(
+        "Grades real-style **past** calls whose outcomes are already known. The data source is set "
+        "in the sidebar under **Advanced: use your own data** — it defaults to the bundled sample."
+    )
     folder = Path(data_dir)
     if not (folder / "prices.csv").exists():
         st.error(
-            f"No `prices.csv` found in `{data_dir}`. Point this at a folder with "
-            "`prices.csv`, `calls.csv`, and `manifest.json` (see data/sample_historical/README.md)."
+            f"No `prices.csv` in `{data_dir}`. Leave the sidebar on the bundled sample, or drop your "
+            "own `prices.csv` / `calls.csv` / `manifest.json` into a folder and point the sidebar "
+            "there (format guide: data/sample_historical/README.md)."
         )
     else:
         result, hist_verdicts = _load_backtest(str(folder))
@@ -129,8 +181,8 @@ with tab_hist:
         )
 
         st.header("Historical Leaderboard")
-        st.dataframe(leaderboard_dataframe(result.leaderboard), use_container_width=True, hide_index=True, column_config=_LB_COLS)
-        st.pyplot(plot_leaderboard(result.leaderboard))
+        st.dataframe(_leaderboard_for_display(result.leaderboard), use_container_width=True, hide_index=True, column_config=_LB_COLS)
+        st.pyplot(plot_leaderboard(result.leaderboard, dark=True))
 
         st.header("Historical Analyst Profile")
         hist_names = {s.analyst_name: s.analyst_id for s in result.leaderboard.rows}
@@ -170,15 +222,16 @@ with tab_live:
     )
 
     c1, c2, c3 = st.columns(3)
-    live_ticker = c1.text_input("Ticker", value="AAPL", key="live_ticker")
+    live_ticker = c1.text_input("Ticker", value="AAPL", key="live_ticker", help="e.g. AAPL, MSFT, NVDA")
     live_rating = c2.selectbox("Rating", [r.value for r in Rating], index=0, key="live_rating")
-    live_target = c3.number_input("Price target ($)", min_value=0.01, value=250.0, step=1.0, key="live_target")
+    live_target = c3.number_input("Target price ($)", min_value=0.01, value=250.0, step=1.0, key="live_target")
 
     c4, c5, c6 = st.columns(3)
     live_call_date = c4.date_input(
         "Call date (must be in the past)", value=date(2025, 1, 2), max_value=date.today(), key="live_call_date"
     )
-    live_benchmark = c5.text_input("Benchmark symbol", value="^GSPC", key="live_benchmark")
+    live_benchmark = c5.text_input("Benchmark symbol", value="^GSPC", key="live_benchmark",
+                                   help="Index to compare against — ^GSPC is the S&P 500.")
     horizon_mode = c6.radio("Horizon", ["Open-ended (so far)", "By deadline date"], key="live_hmode")
 
     live_deadline = None
@@ -235,4 +288,130 @@ with tab_live:
                 }],
                 use_container_width=True, hide_index=True,
             )
-            st.pyplot(plot_analyst_profile(result.analyst_score))
+            st.pyplot(plot_analyst_profile(result.analyst_score, dark=True))
+
+# ===== Tab 4: forecast (probability of a FUTURE prediction) ===========================
+with tab_fcast:
+    st.header("Forecast — probability a future prediction comes true")
+    st.caption(
+        "Estimate the probability a price **touches your target by a deadline**. The raw estimate "
+        "comes from the stock's own drift + volatility (a closed-form GBM barrier model); it's then "
+        "**self-calibrated on that ticker's own history** so the number reflects how this stock has "
+        "actually behaved. Needs internet + `yfinance`."
+    )
+    st.warning(
+        "This is a **calibrated estimate, not a crystal ball** (a live, point-in-time snapshot — not "
+        "reproducible). Judge it by **calibration** (does 70% mean 70%?) and **discrimination** (AUC) "
+        "— **not “% accuracy.”** On our held-out backtest: ECE ≈ 0.02 (well-calibrated), AUC ≈ 0.71 "
+        "price-only / 0.82 with news. The live path is **price-only**; the news lift is the research "
+        "demo below, not applied here."
+    )
+    st.caption("Example: *“P(AAPL rises to \\$300 by Dec 2026) ≈ 41%”*, plus a calibration curve showing how trustworthy that number is.")
+
+    c1, c2, c3 = st.columns(3)
+    f_ticker = c1.text_input("Ticker", value="AAPL", key="f_ticker", help="e.g. AAPL, MSFT, NVDA")
+    f_dir_label = c2.selectbox("Direction", ["UP — rises to target", "DOWN — falls to target"], key="f_dir")
+    f_target = c3.number_input("Target price ($)", min_value=0.01, value=300.0, step=1.0, key="f_target")
+
+    c4, c5, c6 = st.columns(3)
+    f_deadline = c4.date_input("Deadline (in the future)", value=date.today() + timedelta(days=180),
+                               min_value=date.today() + timedelta(days=1), key="f_deadline")
+    f_bench = c5.text_input("Benchmark symbol", value="^GSPC", key="f_bench",
+                            help="Index to compare against — ^GSPC is the S&P 500.")
+    f_years = c6.slider("Years of history to self-calibrate on", 3, 10, 6, key="f_years")
+
+    if st.button("Estimate probability", type="primary", key="f_go"):
+        direction = Direction.UP if f_dir_label.startswith("UP") else Direction.DOWN
+        try:
+            with st.spinner("Fetching history, self-calibrating, and grading…"):
+                g = grade_forecast_live(
+                    ticker=f_ticker, target_price=float(f_target), deadline=f_deadline,
+                    direction=direction, benchmark_symbol=(f_bench or "^GSPC").strip(),
+                    years_history=int(f_years), as_of=date.today(),
+                )
+        except LiveGradeError as e:
+            st.error(str(e))
+        except Exception as e:  # network / library surprises -> never crash the page
+            st.error(f"Couldn't grade that prediction: {e}")
+        else:
+            verb = "rise to" if g.direction == Direction.UP else "fall to"
+            st.subheader(f"P({g.ticker} will {verb} ${g.target_price:,.2f} by {g.deadline}) ≈ "
+                         f"{g.probability*100:.0f}%")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Calibrated probability", f"{g.probability*100:.0f}%",
+                      help="The self-calibrated estimate — corrected by how this stock has actually behaved.")
+            m2.metric("Raw model (uncalibrated)", f"{g.raw_probability*100:.0f}%",
+                      help="Straight from the GBM barrier model, before history-based correction.")
+            m3.metric("Now → deadline", f"{g.n_days} trading days")
+            if g.calibrated:
+                rec = g.self_cal_metrics.get("recalibrated", {})
+                full = g.self_cal_metrics.get("full") or g.self_cal_metrics.get("+momentum") or rec
+                ece, auc, n_test = rec.get("ece"), (full or {}).get("auc"), rec.get("n")
+                cred = f"When this model says 60%, it has historically hit ~60% on {g.ticker}"
+                if ece is not None and auc is not None:
+                    cred += f" (calibration error ≈ {ece:.2f}, AUC ≈ {auc:.2f} — 0.5 is a coin flip)"
+                st.success(
+                    f"Self-calibrated on {g.ticker}'s own history {g.history_start} → {g.history_end}. " + cred + "."
+                )
+                if n_test is not None and n_test < 60:
+                    st.caption(f"⚠️ Thin sample ({n_test} held-out windows on one stock) — treat the "
+                               "curve and the probability as **indicative**, not precise.")
+                if g.reliability:
+                    st.pyplot(plot_reliability(g.reliability, dark=True))
+            else:
+                st.info("Not enough history to self-calibrate — showing the raw model probability (uncalibrated).")
+            st.caption(
+                f"Start price ${g.s0:,.2f} · benchmark {g.benchmark_symbol} · "
+                f"as of {g.as_of}. Look-ahead-safe: only data up to today informs the estimate."
+            )
+
+            # Persist this prediction for the session so it isn't a throwaway calculation.
+            st.session_state.setdefault("forecasts", []).append({
+                "saved": str(g.as_of),
+                "ticker": g.ticker,
+                "direction": g.direction.value,
+                "target": round(g.target_price, 2),
+                "deadline": str(g.deadline),
+                "probability_%": round(g.probability * 100),
+                "calibrated": g.calibrated,
+            })
+
+    # ---- My predictions (persisted for this session; downloadable) ----
+    saved = st.session_state.get("forecasts", [])
+    if saved:
+        st.divider()
+        st.subheader("📌 My predictions (this session)")
+        st.caption("Saved as you estimate. Download to keep them — a forecast you can't revisit is just a calculator.")
+        st.dataframe(pd.DataFrame(saved), use_container_width=True, hide_index=True)
+        cdl, ccl = st.columns(2)
+        cdl.download_button("⬇️ Download as JSON", data=json.dumps(saved, indent=2),
+                            file_name="my_predictions.json", mime="application/json", key="fc_dl")
+        if ccl.button("Clear", key="fc_clear"):
+            st.session_state["forecasts"] = []
+            st.rerun()
+
+    # ---- evidence: the offline sample shows point-in-time NEWS adds value ----
+    with st.expander("Evidence — does point-in-time news actually help? (offline sample backtest)"):
+        st.caption(
+            "The live path is price-only. On the shipped SAMPLE (synthetic, with a timestamped news "
+            "feed), the calibration backtest measures whether point-in-time news improves held-out "
+            "accuracy — news is only credited if it beats the price-only model on data it never saw."
+        )
+
+        @st.cache_data(show_spinner=False)
+        def _sample_forecast():
+            r = run_forecast_backtest("data/sample_historical", with_news=True,
+                                      gen=ForecastGenConfig(stride_days=21))
+            table = [{"model": k, "Brier": round(v["brier"], 4), "LogLoss": round(v["log_loss"], 4),
+                      "ECE": round(v["ece"], 4)}
+                     for k in ["base_rate", "raw", "recalibrated", "+momentum", "+news", "full"]
+                     for v in [r.metrics[k]]]
+            return table, r.news_helps, r.reliability
+
+        if st.button("Run the sample calibration backtest", key="f_sample"):
+            with st.spinner("Backtesting the sample…"):
+                table, news_helps, reliability = _sample_forecast()
+            st.dataframe(table, use_container_width=True, hide_index=True)
+            st.write(f"**Point-in-time news adds held-out value:** {'✅ yes' if news_helps else '❌ no'} "
+                     "(lower Brier / LogLoss / ECE is better).")
+            st.pyplot(plot_reliability(reliability, dark=True))

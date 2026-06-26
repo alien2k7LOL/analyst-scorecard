@@ -75,6 +75,14 @@ def _cls_for(beat) -> str:
     return "pos" if beat > 0 else "neg"
 
 
+def _lb_alt(leaderboard, label: str) -> str:
+    """Data-driven alt text so the bar chart isn't opaque to screen readers."""
+    rows = [r for r in leaderboard.rows if r.beat_market is not None]
+    top = ", ".join(f"{r.analyst_name} {_pct(r.beat_market)}" for r in rows[:4])
+    return f"{label}: horizontal bar chart of beat-the-market vs the index. {top}" + (
+        "…" if len(rows) > 4 else "")
+
+
 # --------------------------------------------------------------------------------------
 # Sections
 # --------------------------------------------------------------------------------------
@@ -82,27 +90,29 @@ def _cls_for(beat) -> str:
 
 def _leaderboard_html(leaderboard, verdicts) -> str:
     head = (
-        "<tr><th>#</th><th>Analyst</th><th>Firm</th>"
-        "<th class='r'>Beat-Market</th><th class='r'>Dir. Hit-Rate</th>"
-        "<th class='r'>Accuracy</th><th class='r'>Calls</th><th class='r'>Directional</th></tr>"
+        "<tr><th scope='col'>#</th><th scope='col'>Analyst</th><th scope='col'>Firm</th>"
+        "<th scope='col' class='r'>Beat-Market</th><th scope='col' class='r'>Dir. Hit-Rate</th>"
+        "<th scope='col' class='r'>Accuracy</th><th scope='col' class='r'>Calls</th>"
+        "<th scope='col' class='r'>Directional</th></tr>"
     )
     body = []
     for rank, s in enumerate(leaderboard.rows, start=1):
         verdict = verdicts.get(s.analyst_id, "")
         body.append(
             "<tr>"
-            f"<td class='rank'>{rank}</td>"
+            f"<th scope='row' class='rank'>{rank}</th>"
             f"<td class='name'>{html.escape(s.analyst_name)}</td>"
             f"<td class='firm'>{html.escape(s.firm)}</td>"
             f"<td class='r {_cls_for(s.beat_market)}'>{_pct(s.beat_market)}</td>"
-            f"<td class='r'>{_pct(s.direction_hit_rate, digits=0)}</td>"
+            f"<td class='r'>{_pct(s.direction_hit_rate, digits=0, signed=False)}</td>"
             f"<td class='r'>{_num(s.mean_accuracy)}</td>"
             f"<td class='r'>{s.n_calls}</td>"
             f"<td class='r'>{s.n_directional}</td>"
             "</tr>"
             f"<tr class='verdict'><td></td><td colspan='7'>{html.escape(verdict)}</td></tr>"
         )
-    return f"<table class='lb'><thead>{head}</thead><tbody>{''.join(body)}</tbody></table>"
+    return ("<table class='lb'><caption class='visually-hidden'>Analyst leaderboard ranked by "
+            f"beat-the-market</caption><thead>{head}</thead><tbody>{''.join(body)}</tbody></table>")
 
 
 def _analyst_blocks_html(leaderboard, scores_by_id, verdicts, prefix: str) -> str:
@@ -118,25 +128,34 @@ def _analyst_blocks_html(leaderboard, scores_by_id, verdicts, prefix: str) -> st
             f"<option value='{html.escape(aid)}'{selected}>{html.escape(row.analyst_name)}</option>"
         )
 
-        chart = _fig_to_img(plot_analyst_profile(score), alt=f"{row.analyst_name} profile")
+        beat_word = "beat the index" if (score.beat_market or 0) > 0 else "lagged the index"
+        chart = _fig_to_img(
+            plot_analyst_profile(score),
+            alt=f"{row.analyst_name} profile scatter — mean beat-the-market {_pct(score.beat_market)} ({beat_word}).",
+        )
         tiles = (
             "<div class='tiles'>"
             f"<div class='tile'><span class='k'>Beat-the-Market</span>"
             f"<span class='v {_cls_for(score.beat_market)}'>{_pct(score.beat_market)}</span></div>"
             f"<div class='tile'><span class='k'>Direction Hit-Rate</span>"
-            f"<span class='v'>{_pct(score.direction_hit_rate, digits=0)}</span></div>"
+            f"<span class='v'>{_pct(score.direction_hit_rate, digits=0, signed=False)}</span></div>"
             f"<div class='tile'><span class='k'>Accuracy</span>"
             f"<span class='v'>{_num(score.mean_accuracy)}</span></div>"
             "</div>"
         )
         verdict = f"<p class='verdict-line'>{html.escape(verdicts.get(aid, ''))}</p>"
         table = call_detail_dataframe(score).to_html(index=False, border=0, classes="drill")
+        table = table.replace("<th>", '<th scope="col">')
+        table = table.replace(
+            'class="dataframe drill">',
+            f'class="dataframe drill"><caption class="visually-hidden">'
+            f'Call-level detail for {html.escape(row.analyst_name)}</caption>', 1)
 
         blocks.append(
             f"<div class='analyst {prefix}-analyst' id='{prefix}-{html.escape(aid)}' style='display:{display}'>"
             f"{verdict}{tiles}{chart}"
-            f"<h4>Call-level drill-down — full traceability</h4>"
-            f"<div class='scroll'>{table}</div>"
+            f"<h3 class='subhead'>Call-level drill-down — full traceability</h3>"
+            f"<div class='scroll' tabindex='0'>{table}</div>"
             "</div>"
         )
 
@@ -184,58 +203,84 @@ def _skips_html(result) -> str:
 # --------------------------------------------------------------------------------------
 
 _CSS = """
-:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#6b7280;--line:#e5e7eb;
---pos:#1a9850;--neg:#d73027;--accent:#2b6cb0;}
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1d2330;--muted:#5b6472;--line:#e5e7eb;
+--pos:#157a3f;--neg:#c0392b;--accent:#2b6cb0;}
+@media (prefers-color-scheme: dark){:root{--bg:#11151c;--card:#1a212b;--ink:#e6e9ef;
+--muted:#9aa3b2;--line:#2a313c;--pos:#3ddc84;--neg:#ff6b5e;--accent:#6fb1ee;}}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--ink);
 font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
 .wrap{max-width:1080px;margin:0 auto;padding:28px 22px 80px}
 header h1{margin:0 0 4px;font-size:26px}
 header p{margin:0;color:var(--muted);max-width:760px}
+a{color:var(--accent)}
+:focus-visible{outline:3px solid var(--accent);outline-offset:2px;border-radius:6px}
+.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+clip:rect(0 0 0 0);white-space:nowrap;border:0}
 .tabbar{display:flex;gap:6px;margin:22px 0 0;border-bottom:2px solid var(--line)}
 .tabbtn{appearance:none;border:0;background:none;padding:10px 16px;font-size:15px;cursor:pointer;
 color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-2px}
 .tabbtn.active{color:var(--accent);border-bottom-color:var(--accent);font-weight:600}
-.tab{display:none;padding-top:8px}
+.tabbtn:focus-visible{outline-offset:-3px}
+.tab{display:none;padding-top:8px}.tab:focus{outline:none}
 section{background:var(--card);border:1px solid var(--line);border-radius:12px;
 padding:18px 20px;margin:18px 0;box-shadow:0 1px 2px rgba(16,24,40,.04)}
 h2{font-size:18px;margin:0 0 12px}
-h4{font-size:14px;margin:18px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.subhead{font-size:14px;margin:18px 0 8px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
 .meta{color:var(--muted);font-size:13px;margin:0 0 10px}
 table{border-collapse:collapse;width:100%;font-size:13.5px}
 .lb th,.lb td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line)}
 .lb th.r,.lb td.r{text-align:right;font-variant-numeric:tabular-nums}
-.lb .rank{color:var(--muted);width:34px}
+.lb .rank{color:var(--muted);width:34px;font-weight:400}
 .lb .name{font-weight:600}.lb .firm{color:var(--muted)}
 .lb .verdict td{border-bottom:1px solid var(--line);color:var(--muted);font-size:12.5px;
 padding:0 10px 9px 10px}
 .pos{color:var(--pos);font-weight:600}.neg{color:var(--neg);font-weight:600}.neutral{color:var(--muted)}
-.chart{display:block;max-width:100%;height:auto;margin:14px auto;border-radius:8px}
+.chart{display:block;max-width:100%;height:auto;margin:14px auto;border-radius:8px;background:#fff}
 .picker{display:inline-block;margin:6px 0 4px;font-size:14px;color:var(--muted)}
-.picker select{font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;margin-left:6px}
+.picker select{font-size:14px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;margin-left:6px;
+background:var(--card);color:var(--ink)}
 .tiles{display:flex;gap:12px;flex-wrap:wrap;margin:12px 0}
 .tile{flex:1 1 150px;background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 14px}
 .tile .k{display:block;color:var(--muted);font-size:12px}
 .tile .v{display:block;font-size:22px;font-weight:700;margin-top:2px}
-.verdict-line{background:#eef5fb;border-left:3px solid var(--accent);padding:10px 12px;border-radius:6px;margin:6px 0 2px}
+.verdict-line{background:color-mix(in srgb,var(--accent) 12%,transparent);border-left:3px solid var(--accent);
+padding:10px 12px;border-radius:6px;margin:6px 0 2px}
 .scroll{overflow-x:auto}
 .drill{font-size:12px}.drill th,.drill td{padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
 .drill thead th{position:sticky;top:0;background:var(--card)}
 details.skips{margin-top:14px}summary{cursor:pointer;color:var(--accent);font-weight:600}
 footer{color:var(--muted);font-size:12.5px;margin-top:26px;text-align:center}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 """
 
 _JS = """
 function showTab(t){
-  document.querySelectorAll('.tab').forEach(e=>e.style.display='none');
+  document.querySelectorAll('.tab').forEach(function(e){e.style.display='none';});
   document.getElementById('tab-'+t).style.display='block';
-  document.querySelectorAll('.tabbtn').forEach(b=>b.classList.remove('active'));
-  document.getElementById('btn-'+t).classList.add('active');
+  document.querySelectorAll('.tabbtn').forEach(function(b){
+    b.classList.remove('active');b.setAttribute('aria-selected','false');b.tabIndex=-1;});
+  var btn=document.getElementById('btn-'+t);
+  btn.classList.add('active');btn.setAttribute('aria-selected','true');btn.tabIndex=0;
 }
 function showAnalyst(prefix,id){
-  document.querySelectorAll('.'+prefix+'-analyst').forEach(e=>e.style.display='none');
+  document.querySelectorAll('.'+prefix+'-analyst').forEach(function(e){e.style.display='none';});
   document.getElementById(prefix+'-'+id).style.display='block';
 }
+// WAI-ARIA tabs: roving tabindex + arrow/Home/End keyboard navigation.
+document.addEventListener('DOMContentLoaded',function(){
+  var tabs=[].slice.call(document.querySelectorAll('[role=tab]'));
+  tabs.forEach(function(tab,i){
+    tab.addEventListener('keydown',function(e){
+      var n=null;
+      if(e.key==='ArrowRight'){n=tabs[(i+1)%tabs.length];}
+      else if(e.key==='ArrowLeft'){n=tabs[(i-1+tabs.length)%tabs.length];}
+      else if(e.key==='Home'){n=tabs[0];}
+      else if(e.key==='End'){n=tabs[tabs.length-1];}
+      if(n){e.preventDefault();n.click();n.focus();}
+    });
+  });
+});
 """
 
 
@@ -246,14 +291,14 @@ def build_html(data_dir: Path = SAMPLE_DATA_DIR) -> str:
     dash = build_dashboard(DEFAULT_CONFIG)
     syn_verdicts = {aid: gen.verdict(s) for aid, s in dash.scores_by_id.items()}
     syn_lb = _leaderboard_html(dash.leaderboard, syn_verdicts)
-    syn_bar = _fig_to_img(plot_leaderboard(dash.leaderboard), alt="Synthetic leaderboard")
+    syn_bar = _fig_to_img(plot_leaderboard(dash.leaderboard), alt=_lb_alt(dash.leaderboard, "Synthetic leaderboard"))
     syn_blocks = _analyst_blocks_html(dash.leaderboard, dash.scores_by_id, syn_verdicts, "syn")
 
     # ---- historical ----
     result = run_backtest(data_dir)
     hist_verdicts = {s.analyst_id: gen.verdict(s) for s in result.leaderboard.rows}
     hist_lb = _leaderboard_html(result.leaderboard, hist_verdicts)
-    hist_bar = _fig_to_img(plot_leaderboard(result.leaderboard), alt="Historical leaderboard")
+    hist_bar = _fig_to_img(plot_leaderboard(result.leaderboard), alt=_lb_alt(result.leaderboard, "Historical leaderboard"))
     hist_blocks = _analyst_blocks_html(result.leaderboard, result.analyst_scores, hist_verdicts, "hist")
     tag = ("SAMPLE data — synthetic & fictional (replace with your own files)"
            if result.is_sample else "user-supplied data")
@@ -274,12 +319,12 @@ def build_html(data_dir: Path = SAMPLE_DATA_DIR) -> str:
   <b>beat-the-market</b>: would you have done better just buying the index?</p>
 </header>
 
-<div class="tabbar">
-  <button class="tabbtn active" id="btn-syn" onclick="showTab('syn')">🧪 Synthetic engine demo</button>
-  <button class="tabbtn" id="btn-hist" onclick="showTab('hist')">📜 Historical back-test</button>
+<div class="tabbar" role="tablist" aria-label="Views">
+  <button class="tabbtn active" id="btn-syn" role="tab" aria-selected="true" aria-controls="tab-syn" tabindex="0" onclick="showTab('syn')">🧪 Synthetic engine demo</button>
+  <button class="tabbtn" id="btn-hist" role="tab" aria-selected="false" aria-controls="tab-hist" tabindex="-1" onclick="showTab('hist')">📜 Historical back-test</button>
 </div>
 
-<div class="tab" id="tab-syn" style="display:block">
+<div class="tab" id="tab-syn" role="tabpanel" aria-labelledby="btn-syn" tabindex="0" style="display:block">
   <section>
     <h2>Leaderboard — ranked by Beat-the-Market</h2>
     {syn_lb}{syn_bar}
@@ -292,7 +337,7 @@ def build_html(data_dir: Path = SAMPLE_DATA_DIR) -> str:
   </section>
 </div>
 
-<div class="tab" id="tab-hist">
+<div class="tab" id="tab-hist" role="tabpanel" aria-labelledby="btn-hist" tabindex="0">
   <section>
     <h2>Historical Leaderboard</h2>
     <p class="meta">Source: <b>{html.escape(tag)}</b>{(' · ' + span) if span else ''}<br>{counts}</p>
@@ -321,16 +366,32 @@ def build_site(data_dir: Path = SAMPLE_DATA_DIR) -> Path:
     return out
 
 
-def serve(port: int) -> None:
+class _Server(socketserver.TCPServer):
+    allow_reuse_address = True  # avoid "address already in use" on a socket still in TIME_WAIT
+
+
+def serve(port: int, max_tries: int = 20) -> None:
+    """Serve site/ over HTTP. If ``port`` is taken, walk forward to the next free one."""
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=str(SITE_DIR))
-    with socketserver.TCPServer(("", port), handler) as httpd:
-        url = f"http://localhost:{port}"
-        print(f"\n  Analyst Scorecard is live at  {url}")
-        print("  Press Ctrl+C to stop.\n")
+    for candidate in range(port, port + max_tries):
         try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\n  Stopped.")
+            httpd = _Server(("", candidate), handler)
+        except OSError as e:
+            if e.errno in (48, 98) and candidate < port + max_tries - 1:  # EADDRINUSE (macOS 48 / Linux 98)
+                if candidate == port:
+                    print(f"  Port {port} is busy (something else is already using it) — trying the next one…")
+                continue
+            raise
+        with httpd:
+            url = f"http://localhost:{candidate}"
+            note = "" if candidate == port else f"  (port {port} was busy)"
+            print(f"\n  Analyst Scorecard is live at  {url}{note}")
+            print("  Press Ctrl+C to stop.\n")
+            try:
+                httpd.serve_forever()
+            except KeyboardInterrupt:
+                print("\n  Stopped.")
+            return
 
 
 def main(argv=None) -> int:

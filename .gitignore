@@ -28,3 +28,6 @@ outputs/*.html
 
 # Generated website (rebuild with `python website.py --build`)
 site/
+
+# UX-audit scratch (evidence notes + driver scripts)
+.audit/

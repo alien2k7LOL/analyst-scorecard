@@ -32,6 +32,39 @@ OUTPUT_DIR = Path(__file__).resolve().parents[1] / "outputs"
 _BEAT_COLOR = "#1a9850"   # green — beat the index
 _LAG_COLOR = "#d73027"    # red — lagged the index
 
+# Dark-theme palette so charts embedded in the dark Streamlit app aren't bright white boxes.
+_DARK_INK = "#d7dce3"
+_DARK_AXIS = "#5b636e"
+
+
+def _ref_color(dark: bool) -> str:
+    """Reference-line / zero-line color that reads on both light and dark backgrounds."""
+    return "#8b95a3" if dark else "#555555"
+
+
+def _apply_theme(fig, axes, dark: bool):
+    """Make a figure transparent with light ink so it sits cleanly on the dark app.
+
+    Default (dark=False) is a no-op, so the light static website keeps its white charts.
+    """
+    if not dark:
+        return fig
+    fig.patch.set_alpha(0.0)
+    for ax in axes:
+        ax.set_facecolor("none")
+        ax.tick_params(colors=_DARK_INK)
+        for spine in ax.spines.values():
+            spine.set_color(_DARK_AXIS)
+        ax.xaxis.label.set_color(_DARK_INK)
+        ax.yaxis.label.set_color(_DARK_INK)
+        ax.title.set_color(_DARK_INK)
+        leg = ax.get_legend()
+        if leg is not None:
+            leg.get_frame().set_alpha(0.0)
+            for txt in leg.get_texts():
+                txt.set_color(_DARK_INK)
+    return fig
+
 
 @dataclass
 class DashboardData:
@@ -108,7 +141,7 @@ def call_detail_dataframe(score: AnalystScore) -> pd.DataFrame:
 # --------------------------------------------------------------------------------------
 
 
-def plot_leaderboard(leaderboard: Leaderboard):
+def plot_leaderboard(leaderboard: Leaderboard, *, dark: bool = False):
     """Horizontal bar of beat-the-market by analyst (the headline ranking)."""
     rows = [r for r in leaderboard.rows if r.beat_market is not None]
     rows = sorted(rows, key=lambda r: r.beat_market)
@@ -118,17 +151,18 @@ def plot_leaderboard(leaderboard: Leaderboard):
 
     fig, ax = plt.subplots(figsize=(8, 4.5))
     ax.barh(names, values, color=colors)
-    ax.axvline(0, color="#333333", linewidth=1)
+    ax.axvline(0, color=_ref_color(dark), linewidth=1.2)
     ax.set_xlabel("Beat-the-Market (mean excess return vs index, %)")
     ax.set_title("Analyst Leaderboard — would you have beaten the index?")
     for y, v in enumerate(values):
         ax.text(v + (0.5 if v >= 0 else -0.5), y, f"{v:+.1f}%",
-                va="center", ha="left" if v >= 0 else "right", fontsize=8)
+                va="center", ha="left" if v >= 0 else "right", fontsize=9,
+                color=_DARK_INK if dark else "#222222")
     fig.tight_layout()
-    return fig
+    return _apply_theme(fig, [ax], dark)
 
 
-def plot_analyst_profile(score: AnalystScore):
+def plot_analyst_profile(score: AnalystScore, *, dark: bool = False):
     """Scatter of (index return, return-from-following-the-call) per directional call.
 
     The y = x line is "you matched the index". Points above beat the index; below lagged it.
@@ -146,7 +180,7 @@ def plot_analyst_profile(score: AnalystScore):
         pad = max(5.0, (hi - lo) * 0.1)
         lim = (lo - pad, hi + pad)
         # y = x reference: "matched the index"
-        ax.plot(lim, lim, color="#555555", linestyle="--", linewidth=1, label="matches the index")
+        ax.plot(lim, lim, color=_ref_color(dark), linestyle="--", linewidth=1, label="matches the index")
         for x, y, ticker, beat in pts:
             color = _BEAT_COLOR if (beat is not None and beat > 0) else _LAG_COLOR
             ax.scatter(x, y, color=color, s=45, edgecolor="white", zorder=3)
@@ -162,10 +196,31 @@ def plot_analyst_profile(score: AnalystScore):
     ax.set_xlabel("Index (benchmark) return over the horizon (%)")
     ax.set_ylabel("Return from following the call (%)")
     ax.set_title(f"{score.analyst_name} — above the line beats the index\nMean beat-market: {bm_str}")
-    ax.legend(loc="upper left", fontsize=8)
+    ax.legend(loc="lower right", fontsize=8)  # out of the shaded 'beat' region (upper-left)
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
-    return fig
+    return _apply_theme(fig, [ax], dark)
+
+
+def plot_reliability(bins, *, dark: bool = False):
+    """Calibration curve: predicted probability (x) vs actual frequency (y). On the line = honest."""
+    fig, ax = plt.subplots(figsize=(5.5, 5.5))
+    ax.plot([0, 1], [0, 1], "--", color=_ref_color(dark), linewidth=1, label="perfect calibration")
+    if bins:
+        xs = [b.mean_pred for b in bins]
+        ys = [b.mean_actual for b in bins]
+        sizes = [max(20, min(320, b.n)) for b in bins]
+        ax.scatter(xs, ys, s=sizes, color="#4c9be8" if dark else "#2b6cb0", alpha=0.85,
+                   edgecolor="white" if dark else "#1b4a73", zorder=3)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    ax.set_xlabel("Predicted touch probability")
+    ax.set_ylabel("Actual touch frequency")
+    ax.set_title("Calibration — points on the dashed line are trustworthy")
+    ax.legend(loc="lower right", fontsize=8)  # out of the diagonal's path through upper-left
+    ax.grid(True, alpha=0.2)
+    fig.tight_layout()
+    return _apply_theme(fig, [ax], dark)
 
 
 # --------------------------------------------------------------------------------------
