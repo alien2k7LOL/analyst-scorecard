@@ -25,3 +25,6 @@ venv/
 outputs/*.png
 outputs/*.html
 !outputs/.gitkeep
+
+# Generated website (rebuild with `python website.py --build`)
+site/
