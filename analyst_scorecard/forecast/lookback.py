@@ -13,7 +13,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from ..providers.price_provider import DateLike, PriceDataProvider, _ts
+from ..providers.price_provider import DateLike, PriceDataProvider
+from .interval import BarInterval, to_ts
 
 
 @dataclass(frozen=True)
@@ -66,17 +67,23 @@ class LookbackWindow:
 
 
 def lookback_window(
-    provider: PriceDataProvider, symbol: str, as_of: DateLike, lookback_days: int = 252
+    provider: PriceDataProvider,
+    symbol: str,
+    as_of: DateLike,
+    lookback_days: int = 252,
+    interval: BarInterval = BarInterval.DAILY,
 ) -> LookbackWindow:
     """Build the [.., as_of] lookback for ``symbol`` using ONLY prices on/before as_of.
 
-    ``as_of`` is snapped back to the last available trading day on/before it, and the window is the
-    trailing ``lookback_days + 1`` observations ending there. Nothing after as_of is ever included.
+    ``as_of`` is snapped back to the last available bar on/before it, and the window is the trailing
+    ``lookback_days + 1`` bars ending there (bars = trading days for daily, 30-min bars for intraday).
+    Nothing after as_of is ever included. ``interval`` only changes how ``as_of`` is normalized — for
+    intraday the exact time of day is kept, so the slice doesn't collapse onto midnight.
     """
     series = provider.price_series(symbol)
-    asof_ts = _ts(as_of)
+    asof_ts = to_ts(as_of, interval)
     past = series.loc[:asof_ts]  # label slice: everything on/before as_of
     if len(past) < 2:
-        raise ValueError(f"no usable price history for {symbol!r} on/before {asof_ts.date()}")
+        raise ValueError(f"no usable price history for {symbol!r} on/before {asof_ts}")
     tail = past.iloc[-(lookback_days + 1):]
     return LookbackWindow(symbol=symbol, as_of=tail.index[-1], prices=tail)

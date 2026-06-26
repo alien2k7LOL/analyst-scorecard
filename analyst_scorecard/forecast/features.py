@@ -13,8 +13,9 @@ from datetime import date
 
 import numpy as np
 
-from ..providers.price_provider import PriceDataProvider, _ts
+from ..providers.price_provider import PriceDataProvider
 from ..schemas import Direction
+from .interval import BarInterval, bars_between
 from .lookback import lookback_window
 from .news import NEWS_FEATURE_NAMES, NewsProvider, NoNewsProvider
 from .prediction import Prediction, PredictionKind
@@ -36,6 +37,33 @@ def _logit(p: float, eps: float = 1e-6) -> float:
     return float(np.log(p / (1.0 - p)))
 
 
+# Drift is the single most over-trusted input in short-horizon forecasting: the mean of recent
+# returns is mostly noise, and extrapolating it over the horizon balloons directional probabilities
+# (a recent uptrend makes a far target look reachable). Two grounded corrections:
+#   1. Information shrinkage — scale the drift by its own significance t²/(1+t²), t = mean·√N/σ, so a
+#      statistically-insignificant drift (the usual case) collapses toward zero.
+#   2. A hard cap relative to diffusion — the drift may move the median at most CAP·σ·√T over the
+#      horizon. Intraday is treated as a MARTINGALE (CAP=0): 30-min returns are ~unpredictable, so the
+#      probability is volatility-driven, not momentum-extrapolated. Any real edge still enters through
+#      the calibrated momentum/news features, learned from data rather than assumed.
+_DRIFT_CAP_DAILY = 0.5
+_DRIFT_CAP_INTRADAY = 0.0
+
+
+def _effective_drift(mu: float, sigma: float, n_returns: int, n_days: int, interval: BarInterval) -> float:
+    sig = max(sigma, MIN_SIGMA)
+    if n_returns >= 2:
+        t = mu * np.sqrt(n_returns) / sig
+        mu_shrunk = mu * (t * t) / (1.0 + t * t)
+    else:
+        mu_shrunk = 0.0
+    cap_c = _DRIFT_CAP_INTRADAY if interval == BarInterval.MIN30 else _DRIFT_CAP_DAILY
+    if cap_c <= 0.0:
+        return 0.0
+    cap = cap_c * sig / np.sqrt(max(n_days, 1))
+    return float(np.clip(mu_shrunk, -cap, cap))
+
+
 @dataclass(frozen=True)
 class FeatureRow:
     prediction_id: str
@@ -46,8 +74,10 @@ class FeatureRow:
     s0: float
     target: float
     n_days: int
-    gbm_p: float            # raw closed-form touch probability
+    gbm_p: float            # raw closed-form probability for this prediction's kind
     features: dict          # all numeric features, incl gbm_logit (keys in ALL_FEATURE_NAMES)
+    mu: float = 0.0         # per-bar drift (mean daily/30-min log return) used by the model
+    sigma: float = 0.0      # per-bar volatility (std of log returns) used by the model
 
 
 def trading_days_to(as_of: date, deadline: date) -> int:
@@ -63,13 +93,16 @@ def build_features(
     news_lookback_days: int = 120,
 ) -> FeatureRow:
     news_provider = news_provider or NoNewsProvider()
-    lw = lookback_window(price_provider, prediction.ticker, prediction.as_of, lookback_days)
+    lw = lookback_window(price_provider, prediction.ticker, prediction.as_of, lookback_days,
+                         interval=prediction.interval)
     s0 = lw.last_price
-    mu, sigma = lw.drift_vol()
+    mu_raw, sigma = lw.drift_vol()
     sigma_floor = max(sigma, MIN_SIGMA)
     mom = lw.momentum(20)
 
-    n_days = max(trading_days_to(lw.as_of.date(), prediction.deadline), 1)
+    n_days = max(bars_between(lw.as_of, prediction.deadline, prediction.interval), 1)
+    # Shrink/cap the drift before it enters the probability (intraday is treated as driftless).
+    mu = _effective_drift(mu_raw, sigma, len(lw.daily_log_returns()), n_days, prediction.interval)
     # Base probability for THIS prediction's kind: touch (path) or terminal (endpoint at the deadline).
     if prediction.kind == PredictionKind.TERMINAL:
         gbm_p = terminal_probability(
@@ -121,11 +154,13 @@ def build_features(
         prediction_id=prediction.prediction_id,
         ticker=prediction.ticker,
         as_of=lw.as_of.date(),
-        deadline=prediction.deadline,
+        deadline=prediction.deadline.date(),
         direction=prediction.direction,
         s0=s0,
         target=prediction.target_price,
         n_days=n_days,
         gbm_p=gbm_p,
         features=feats,
+        mu=float(mu),
+        sigma=float(sigma),
     )

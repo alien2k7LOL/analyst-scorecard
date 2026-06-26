@@ -17,7 +17,8 @@ import argparse
 import sys
 from typing import Optional
 
-from .backtest import ForecastGenConfig, run_forecast_backtest
+from .backtest import ForecastBacktest, ForecastGenConfig, run_forecast_backtest
+from .interval import BarInterval
 from .prediction import PredictionKind
 
 _ORDER = ["base_rate", "raw", "recalibrated", "+momentum", "+regime", "+news", "full", "full+"]
@@ -25,7 +26,7 @@ _ORDER = ["base_rate", "raw", "recalibrated", "+momentum", "+regime", "+news", "
 
 def render_report(result, *, kind: PredictionKind = PredictionKind.TOUCH, band: Optional[float] = None) -> str:
     noun = "terminal-hit" if kind == PredictionKind.TERMINAL else "touch"
-    band_txt = f" (±{int(band * 100)}% band)" if (kind == PredictionKind.TERMINAL and band) else ""
+    band_txt = f" (±{band * 100:g}% band)" if (kind == PredictionKind.TERMINAL and band) else ""
     rows = []
     rows.append(f"Analyst Scorecard — FORECAST calibration backtest  [{kind.value}{band_txt}]")
     rows.append(
@@ -78,22 +79,39 @@ def main(argv: Optional[list[str]] = None) -> int:
     p = argparse.ArgumentParser(description="Run the forecast calibration backtest.")
     p.add_argument("--data-dir", default="data/sample_historical", help="folder with prices.csv [+ news.csv]")
     p.add_argument("--kind", choices=["touch", "terminal"], default="touch")
-    p.add_argument("--band", type=float, default=0.04, help="terminal tolerance band (e.g. 0.04 = ±4%)")
-    p.add_argument("--stride", type=int, default=21, help="trading days between as_of dates (smaller = denser)")
-    p.add_argument("--horizons", type=str, default="63,126", help="comma list of trading-day horizons")
+    p.add_argument("--band", type=float, default=None, help="terminal tolerance band (default 0.04 daily / 0.006 intraday)")
+    p.add_argument("--stride", type=int, default=21, help="bars between as_of dates (smaller = denser)")
+    p.add_argument("--horizons", type=str, default="63,126", help="comma list of horizons (in bars)")
     p.add_argument("--offsets", type=str, default="0.08,0.15", help="comma list of target offsets from spot")
     p.add_argument("--no-news", action="store_true", help="ablate news (price-only model)")
+    p.add_argument("--intraday-demo", action="store_true", help="run on the synthetic 30-min intraday world")
     args = p.parse_args(argv)
 
+    if args.intraday_demo:
+        from .synth_intraday import intraday_demo_provider
+        kind = PredictionKind.TERMINAL
+        band = args.band if args.band is not None else 0.006
+        gen = ForecastGenConfig(
+            stride_days=13, horizons=(13, 26, 39, 65),  # ~1,2,3,5 trading days of 30-min bars
+            up_offsets=(0.006, 0.012), down_offsets=(0.006, 0.012),
+            kinds=(kind,), terminal_bands=(band,),
+            interval=BarInterval.MIN30, lookback_days=260, min_history=130,
+        )
+        result = ForecastBacktest(intraday_demo_provider(), news_provider=None, gen=gen).run()
+        print(render_report(result, kind=kind, band=band), file=sys.stdout)
+        print("", file=sys.stdout)
+        return 0
+
     kind = PredictionKind(args.kind)
+    band = args.band if args.band is not None else 0.04
     offs = _floats(args.offsets)
     gen = ForecastGenConfig(
         stride_days=args.stride, horizons=_ints(args.horizons),
         up_offsets=offs, down_offsets=offs,
-        kinds=(kind,), terminal_bands=(args.band,),
+        kinds=(kind,), terminal_bands=(band,),
     )
     result = run_forecast_backtest(args.data_dir, with_news=not args.no_news, gen=gen)
-    band = args.band if kind == PredictionKind.TERMINAL else None
+    band = band if kind == PredictionKind.TERMINAL else None
     print(render_report(result, kind=kind, band=band), file=sys.stdout)
     print("", file=sys.stdout)
     return 0

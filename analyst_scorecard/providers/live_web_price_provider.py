@@ -59,21 +59,22 @@ class LiveGradeError(Exception):
 
 
 class PriceFetcher(ABC):
-    """Fetch adjusted daily closes for ``symbols`` over [start, end] as a wide frame.
+    """Fetch adjusted closes for ``symbols`` over [start, end] as a wide frame.
 
-    Returns: DataFrame indexed by normalized (tz-naive, midnight) Timestamp, one column per
-    symbol, values = adjusted close. Missing observations are NaN. Implementations must NOT
-    return any row dated after ``end``.
+    Returns: DataFrame indexed by tz-naive Timestamp (midnight for daily; the exact bar time for
+    intraday), one column per symbol, values = adjusted close. Missing observations are NaN.
+    ``interval`` is "1d" (daily) or an intraday string like "30m"; daily callers may omit it and
+    daily implementations may ignore it.
     """
 
     @abstractmethod
-    def fetch(self, symbols: Sequence[str], start: date, end: date) -> pd.DataFrame: ...
+    def fetch(self, symbols: Sequence[str], start: date, end: date, interval: str = "1d") -> pd.DataFrame: ...
 
 
 class YFinanceFetcher(PriceFetcher):
     """Live fetcher backed by yfinance (lazy import — only needed when actually grading live)."""
 
-    def fetch(self, symbols: Sequence[str], start: date, end: date) -> pd.DataFrame:
+    def fetch(self, symbols: Sequence[str], start: date, end: date, interval: str = "1d") -> pd.DataFrame:
         try:
             import yfinance as yf  # lazy: keeps the core offline-installable
         except ImportError as e:  # pragma: no cover - environment dependent
@@ -83,12 +84,14 @@ class YFinanceFetcher(PriceFetcher):
             ) from e
 
         symbols = list(dict.fromkeys(symbols))  # de-dup, keep order
+        intraday = interval != "1d"
         try:
             # end is exclusive in yfinance -> pad by a day so 'end' itself is included.
             raw = yf.download(
                 symbols,
                 start=start.isoformat(),
                 end=(end + timedelta(days=1)).isoformat(),
+                interval=interval,     # "1d" daily, "30m"/"15m"/… intraday (≤ ~60 days of history)
                 auto_adjust=True,      # 'Close' is split/dividend-adjusted
                 progress=False,
                 threads=False,
@@ -98,8 +101,8 @@ class YFinanceFetcher(PriceFetcher):
 
         if raw is None or len(raw) == 0:
             raise LiveGradeError(
-                f"No live price data returned for {symbols} between {start} and {end}. "
-                "Check the ticker symbols and your connection."
+                f"No live {interval} price data for {symbols} between {start} and {end}. "
+                "Intraday history only goes back ~60 days; check the symbols and your connection."
             )
 
         # Normalize yfinance's shape (MultiIndex columns for many symbols, flat for one).
@@ -109,9 +112,11 @@ class YFinanceFetcher(PriceFetcher):
             close = raw[["Close"]].copy()
             close.columns = [symbols[0]]
 
-        close.index = pd.DatetimeIndex(close.index).tz_localize(None).normalize()
+        idx = pd.DatetimeIndex(close.index).tz_localize(None)
+        close.index = idx if intraday else idx.normalize()   # keep the bar time for intraday
         close = close[~close.index.duplicated(keep="last")].sort_index()
-        close = close.loc[close.index <= _ts(end)]      # belt-and-suspenders: never past 'end'
+        if not intraday:
+            close = close.loc[close.index <= _ts(end)]        # belt-and-suspenders: never past 'end'
         return close.dropna(axis=1, how="all")
 
 

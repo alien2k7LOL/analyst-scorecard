@@ -11,8 +11,10 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from analyst_scorecard.forecast.interval import BarInterval
 from analyst_scorecard.forecast.live import grade_forecast_live
 from analyst_scorecard.forecast.prediction import PredictionKind
+from analyst_scorecard.forecast.synth_intraday import generate_intraday_frame
 from analyst_scorecard.providers.live_web_price_provider import LiveGradeError, PriceFetcher
 from analyst_scorecard.schemas import Direction
 
@@ -65,6 +67,72 @@ def test_direction_matters(frame):
     down = grade_forecast_live(ticker="AAA", target_price=70.0, deadline=AS_OF + timedelta(days=120),
                                direction=Direction.DOWN, as_of=AS_OF, fetcher=FrameFetcher(frame))
     assert up.probability != down.probability  # different targets/directions -> different odds
+
+
+class IntradayFrameFetcher(PriceFetcher):
+    """Offline stand-in for the yfinance 30-min fetch: slices a synthetic intraday frame."""
+
+    def __init__(self, frame):
+        self.frame = frame
+
+    def fetch(self, symbols, start, end, interval="1d"):
+        e = pd.Timestamp(end) + pd.Timedelta(days=1)
+        cols = [c for c in symbols if c in self.frame.columns]
+        return self.frame.loc[self.frame.index < e, cols].copy()
+
+
+def test_intraday_30min_grade_self_calibrates_on_intraday_bars():
+    frame = generate_intraday_frame(seed=7, n_days=200)
+    last = frame.index[-1]
+    s0 = float(frame["VELO"].iloc[-1])
+    deadline = (last.normalize() + pd.offsets.BDay(2) + pd.Timedelta(hours=12)).to_pydatetime()
+    g = grade_forecast_live(
+        ticker="VELO", target_price=round(s0 * 1.008, 2), deadline=deadline, direction=Direction.UP,
+        kind=PredictionKind.TERMINAL, band_pct=0.006, interval=BarInterval.MIN30,
+        as_of=last.date(), benchmark_symbol="IDX", fetcher=IntradayFrameFetcher(frame),
+    )
+    assert g.interval == BarInterval.MIN30
+    assert g.calibrated is True               # ~200 days of 30-min bars is plenty to self-calibrate
+    assert 0.0 <= g.probability <= 1.0
+    assert g.n_days > 0                        # horizon counted in 30-min bars
+    assert ":" in g.deadline_label            # intraday label carries the time of day
+
+
+def test_intraday_far_short_horizon_target_is_low_probability():
+    # The AAPL "$280 -> $285 by 3pm" case: a ~1.8% move in ~1-2 30-min bars is a ~4-5 sigma event.
+    # Even with a recent uptrend in the data, intraday is treated as driftless, so the probability
+    # must be SMALL — not inflated by extrapolating momentum.
+    from analyst_scorecard.forecast.synth_intraday import market_hours_index
+    idx = market_hours_index(80)
+    n = len(idx)
+    rng = np.random.default_rng(11)
+    mu = np.where(np.arange(n - 1) > n - 220, 0.0009, 0.0)        # planted recent uptrend
+    px = 232.0 * np.exp(np.concatenate([[0.0], np.cumsum(mu + 0.004 * rng.standard_normal(n - 1))]))
+    bench = 5000.0 * np.exp(np.cumsum(np.concatenate([[0.0], 0.002 * rng.standard_normal(n - 1)])))
+    frame = pd.DataFrame({"AAPL": px, "^GSPC": bench}, index=idx)
+    last = idx[-1]
+    s0 = float(frame["AAPL"].iloc[-1])
+    deadline = (last.normalize() + pd.offsets.BDay(1) + pd.Timedelta(hours=10)).to_pydatetime()  # ~2 bars
+    g = grade_forecast_live(
+        ticker="AAPL", target_price=round(s0 * 1.018, 2), deadline=deadline, direction=Direction.UP,
+        kind=PredictionKind.TERMINAL, interval=BarInterval.MIN30, as_of=last.date(),
+        benchmark_symbol="^GSPC", fetcher=IntradayFrameFetcher(frame),
+    )
+    assert g.drift_bar == 0.0           # intraday is driftless (no momentum extrapolation)
+    assert g.raw_probability < 0.05     # far target over ~2 bars -> tiny
+    assert g.probability < 0.10         # and the calibrated number stays realistic
+
+
+def test_intraday_deadline_before_last_bar_is_rejected():
+    frame = generate_intraday_frame(seed=7, n_days=200)
+    last = frame.index[-1]
+    with pytest.raises(LiveGradeError, match="after the latest bar"):
+        grade_forecast_live(
+            ticker="VELO", target_price=100.0, deadline=(last - pd.Timedelta(hours=1)).to_pydatetime(),
+            direction=Direction.UP, kind=PredictionKind.TERMINAL, band_pct=0.006,
+            interval=BarInterval.MIN30, as_of=last.date(), benchmark_symbol="IDX",
+            fetcher=IntradayFrameFetcher(frame),
+        )
 
 
 def test_terminal_mode_self_calibrates_and_is_band_aware(frame):

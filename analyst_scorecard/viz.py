@@ -19,6 +19,7 @@ import matplotlib
 
 matplotlib.use("Agg")  # headless: no display required
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 from .aggregation import aggregate_all
@@ -218,6 +219,104 @@ def plot_reliability(bins, *, dark: bool = False):
     ax.set_ylabel("Actual touch frequency")
     ax.set_title("Calibration — points on the dashed line are trustworthy")
     ax.legend(loc="lower right", fontsize=8)  # out of the diagonal's path through upper-left
+    ax.grid(True, alpha=0.2)
+    fig.tight_layout()
+    return _apply_theme(fig, [ax], dark)
+
+
+def plot_forecast_proof(grade, *, dark: bool = False):
+    """Graphical proof for a live grade: the price cone + the terminal distribution.
+
+    Left  — where the model thinks the price goes (median path with ±1σ/±2σ cone, target line).
+    Right — the distribution of the price ON the deadline; the SHADED area is exactly the probability
+            for a terminal call (for a touch call, touching ever is at least this shaded mass).
+    """
+    s0 = float(grade.s0)
+    mu = float(grade.drift_bar)
+    sigma = max(float(grade.vol_bar), 1e-9)
+    n = max(int(grade.n_days), 1)
+    K = float(grade.target_price)
+    up = grade.direction.value == "up"
+    terminal = grade.kind.value == "terminal"
+    band = grade.band_pct
+    hit_color = _BEAT_COLOR
+    tgt_color = _LAG_COLOR if dark else "#c0392b"
+
+    fig, (axL, axR) = plt.subplots(1, 2, figsize=(11, 4.6))
+
+    # -- Panel A: the price cone --
+    t = np.arange(0, n + 1)
+    sd_t = sigma * np.sqrt(t)
+    median = s0 * np.exp(mu * t)
+    for k, alpha in [(2, 0.10), (1, 0.18)]:
+        axL.fill_between(t, s0 * np.exp(mu * t - k * sd_t), s0 * np.exp(mu * t + k * sd_t),
+                         color="#4c9be8", alpha=alpha, linewidth=0)
+    axL.plot(t, median, color="#4c9be8", lw=1.6, label="median path")
+    axL.axhline(K, color=tgt_color, ls="--", lw=1.4, label=f"target ${K:,.2f}")
+    if terminal and band:
+        axL.plot([n, n], [K * (1 - band), K * (1 + band)], color=hit_color, lw=5, solid_capstyle="butt",
+                 label=f"±{band*100:g}% band")
+    axL.set_xlabel(f"{grade.interval.horizon_word} from now")
+    axL.set_ylabel("price ($)")
+    axL.set_title("Where the model thinks it goes")
+    axL.legend(loc="best", fontsize=8)
+    axL.grid(True, alpha=0.2)
+
+    # -- Panel B: the terminal distribution at the deadline --
+    m = np.log(s0) + mu * n
+    sd = sigma * np.sqrt(n)
+    xs = np.linspace(max(0.01, s0 * np.exp(mu * n - 3.6 * sd)), s0 * np.exp(mu * n + 3.6 * sd), 400)
+    pdf = np.exp(-((np.log(xs) - m) ** 2) / (2 * sd ** 2)) / (xs * sd * np.sqrt(2 * np.pi))
+    axR.plot(xs, pdf, color="#4c9be8", lw=1.6)
+    if terminal and band:
+        mask = (xs >= K * (1 - band)) & (xs <= K * (1 + band))
+        lab = f"within ±{band*100:g}% of target"
+    elif up:
+        mask = xs >= K
+        lab = "ends at/above target"
+    else:
+        mask = xs <= K
+        lab = "ends at/below target"
+    axR.fill_between(xs[mask], pdf[mask], color=hit_color, alpha=0.55, label=lab)
+    axR.axvline(K, color=tgt_color, ls="--", lw=1.2)
+    axR.set_xlabel("price at the deadline ($)")
+    axR.set_ylabel("probability density")
+    axR.set_title("Shaded area = the probability" if terminal else "Terminal mass (touch ≥ this)")
+    axR.legend(loc="best", fontsize=8)
+    axR.grid(True, alpha=0.2)
+
+    fig.suptitle(f"P ≈ {grade.probability*100:.0f}%   ·   {grade.kind.value} · {grade.interval.label}",
+                 fontsize=12, color=_DARK_INK if dark else "#222222")
+    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    return _apply_theme(fig, [axL, axR], dark)
+
+
+def plot_recommendation_chart(report, *, dark: bool = False):
+    """Price since the call vs the benchmark, indexed to 100, with the analyst's target line."""
+    fig, ax = plt.subplots(figsize=(9, 4))
+    ch = getattr(report, "chart", None)
+    if ch is None or len(ch.ticker) < 2:
+        ax.text(0.5, 0.5, "price chart unavailable (no live data)", ha="center", va="center",
+                transform=ax.transAxes, color=_DARK_INK if dark else "#555555")
+        ax.set_xticks([]); ax.set_yticks([])
+        return _apply_theme(fig, [ax], dark)
+
+    t = np.asarray(ch.ticker, dtype=float)
+    b = np.asarray(ch.benchmark, dtype=float)
+    tk = t / t[0] * 100.0
+    bm = b / b[0] * 100.0
+    tgt = ch.target / ch.call_price * 100.0
+    x = np.arange(len(tk))
+    ax.plot(x, tk, color="#4c9be8", lw=1.9, label=str(report.rec.ticker))
+    ax.plot(x, bm, color="#8b95a3", lw=1.4, label=str(report.benchmark_symbol))
+    ax.axhline(tgt, color=_BEAT_COLOR, ls="--", lw=1.4, label=f"target ({tgt-100:+.0f}%)")
+    ax.axhline(100, color=_ref_color(dark), lw=1.0, alpha=0.6)
+    last = tk[-1]
+    ax.scatter([x[-1]], [last], color="#4c9be8", s=40, zorder=3, edgecolor="white")
+    ax.set_xlabel("trading days since the call")
+    ax.set_ylabel("indexed to 100 at the call")
+    ax.set_title(f"{report.rec.ticker} since the {report.rec.rating} call vs {report.benchmark_symbol}")
+    ax.legend(loc="best", fontsize=8)
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
     return _apply_theme(fig, [ax], dark)

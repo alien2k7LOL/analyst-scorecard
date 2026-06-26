@@ -26,9 +26,10 @@ from typing import Optional, Sequence
 import numpy as np
 
 from ..providers.historical_price_provider import HistoricalPriceFileProvider
-from ..providers.price_provider import PriceDataProvider, _ts
+from ..providers.price_provider import PriceDataProvider
 from ..schemas import Direction
 from .calibration import LogisticCalibrator, log_loss, metrics, reliability_bins
+from .interval import BarInterval, to_ts
 from .features import (
     ALL_FEATURE_NAMES,
     ALL_PLUS_FEATURE_NAMES,
@@ -77,7 +78,7 @@ def resolve_outcome(price_provider: PriceDataProvider, pred: Prediction) -> Opti
                This looks only AT the deadline price (never past it), so it stays look-ahead-safe.
     """
     series = price_provider.price_series(pred.ticker)
-    asof, deadline = _ts(pred.as_of), _ts(pred.deadline)
+    asof, deadline = to_ts(pred.as_of, pred.interval), to_ts(pred.deadline, pred.interval)
     past = series.loc[:asof]
     if len(past) < 1:
         return None
@@ -131,6 +132,7 @@ class ForecastGenConfig:
     # bands to use (None = an "at or through the target on the deadline" terminal call).
     kinds: tuple[PredictionKind, ...] = (PredictionKind.TOUCH,)
     terminal_bands: tuple[Optional[float], ...] = (0.03,)
+    interval: BarInterval = BarInterval.DAILY  # DAILY bars, or 30-min intraday bars
 
 
 def _band_tag(kind: PredictionKind, band: Optional[float]) -> str:
@@ -162,20 +164,21 @@ def generate_predictions(
                 if j >= len(idx):
                     continue
                 deadline = idx[j]
+                stamp = as_of.strftime("%Y%m%d-%H%M")  # unique per bar (handles intraday same-day)
                 for kind, band in kind_variants:
                     tag = _band_tag(kind, band)
                     for off in gen.up_offsets:
                         preds.append(Prediction(
-                            prediction_id=f"{tk}|{as_of.date()}|{h}|U{int(off*100)}|{tag}",
-                            ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 + off), 4),
-                            deadline=deadline.date(), direction=Direction.UP,
-                            kind=kind, band_pct=band, made_by="backtest"))
+                            prediction_id=f"{tk}|{stamp}|{h}|U{int(off*100)}|{tag}",
+                            ticker=tk, as_of=as_of, target_price=round(s0 * (1 + off), 4),
+                            deadline=deadline, direction=Direction.UP,
+                            kind=kind, band_pct=band, interval=gen.interval, made_by="backtest"))
                     for off in gen.down_offsets:
                         preds.append(Prediction(
-                            prediction_id=f"{tk}|{as_of.date()}|{h}|D{int(off*100)}|{tag}",
-                            ticker=tk, as_of=as_of.date(), target_price=round(s0 * (1 - off), 4),
-                            deadline=deadline.date(), direction=Direction.DOWN,
-                            kind=kind, band_pct=band, made_by="backtest"))
+                            prediction_id=f"{tk}|{stamp}|{h}|D{int(off*100)}|{tag}",
+                            ticker=tk, as_of=as_of, target_price=round(s0 * (1 - off), 4),
+                            deadline=deadline, direction=Direction.DOWN,
+                            kind=kind, band_pct=band, interval=gen.interval, made_by="backtest"))
     return preds
 
 

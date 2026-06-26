@@ -13,13 +13,15 @@ Both models are frozen so a recorded prediction can't be silently re-chosen afte
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from enum import Enum
 from typing import Optional
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..schemas import Direction
+from .interval import BarInterval
 
 
 class PredictionKind(str, Enum):
@@ -30,15 +32,19 @@ class PredictionKind(str, Enum):
 
 
 class Prediction(BaseModel):
-    """One forward-looking price prediction, fixed at record time (``as_of``)."""
+    """One forward-looking price prediction, fixed at record time (``as_of``).
+
+    ``as_of`` / ``deadline`` are datetimes so a 30-min (intraday) deadline keeps its time of day;
+    a plain ``date`` is accepted and coerced to midnight, which is exactly right for daily calls.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     prediction_id: str
     ticker: str
-    as_of: date = Field(description="When the prediction is made — only data <= as_of may inform it.")
+    as_of: datetime = Field(description="When the prediction is made — only data <= as_of may inform it.")
     target_price: float = Field(gt=0, description="The price the prediction is about.")
-    deadline: date = Field(description="The resolution date (strictly after as_of).")
+    deadline: datetime = Field(description="The resolution moment (strictly after as_of).")
     direction: Direction = Field(description="UP = rises to/through target; DOWN = falls to/through target.")
     kind: PredictionKind = Field(
         default=PredictionKind.TOUCH,
@@ -50,11 +56,24 @@ class Prediction(BaseModel):
         description="TERMINAL only: ± tolerance band around the target (e.g. 0.03 = within 3%). "
         "None means 'at or through' the target in the predicted direction.",
     )
+    interval: BarInterval = Field(
+        default=BarInterval.DAILY,
+        description="Resolution of the prediction: daily bars or 30-min intraday bars.",
+    )
     made_by: str = "user"
+
+    @field_validator("as_of", "deadline", mode="before")
+    @classmethod
+    def _coerce_datetime(cls, v):
+        """Accept date / datetime / Timestamp / ISO string uniformly as a tz-naive datetime."""
+        ts = pd.Timestamp(v)
+        if ts.tz is not None:
+            ts = ts.tz_localize(None)
+        return ts.to_pydatetime()
 
     @field_validator("deadline")
     @classmethod
-    def _deadline_after_as_of(cls, v: date, info) -> date:
+    def _deadline_after_as_of(cls, v: datetime, info) -> datetime:
         a = info.data.get("as_of")
         if a is not None and v <= a:
             raise ValueError(f"deadline {v} must be strictly after as_of {a}")
