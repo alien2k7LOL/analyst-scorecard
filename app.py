@@ -14,7 +14,9 @@ Two tabs:
 
 from __future__ import annotations
 
+import io
 import json
+import math
 import os
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -147,33 +149,97 @@ def _profile_block(score, verdict_text: str):
     st.pyplot(plot_analyst_profile(score, dark=True))
 
 
-def _render_forecast_result(g):
-    """Render a live forecast grade: headline, credibility, and the math/graph/news PROOF."""
-    unit = g.interval.horizon_word
+def _save_forecast(g):
+    """Append this prediction to the session list — called ONCE on estimate (not on every re-render)."""
+    st.session_state.setdefault("forecasts", []).append({
+        "saved": str(g.as_of), "ticker": g.ticker, "resolution": g.interval.value,
+        "type": "at-the-date" if g.kind == PredictionKind.TERMINAL else "touch-before",
+        "direction": g.direction.value, "target": round(g.target_price, 2),
+        "band_±%": (round(g.band_pct * 100, 2) if g.band_pct else None),
+        "deadline": g.deadline_label, "probability_%": round(g.probability * 100),
+        "calibrated": g.calibrated,
+    })
+
+
+def _forecast_unit(g):
+    """Singular vs plural horizon word so a 1-bar horizon reads '1 trading day', not '1 trading days'."""
+    return g.interval.horizon_word if int(g.n_days) != 1 else g.interval.label
+
+
+def _safe_headlines(ticker):
+    try:
+        return recent_headlines(ticker, limit=5)
+    except Exception:
+        return []
+
+
+def _cone_alt_text(g):
+    """A screen-reader summary of the price-cone chart, built from the grade alone (st.pyplot has no alt)."""
+    n = max(int(g.n_days), 1)
+    median_end = g.s0 * math.exp(g.drift_bar * n)
+    sd = max(g.vol_bar, 1e-9) * math.sqrt(n)
+    sigma_dist = abs(math.log(g.target_price / g.s0)) / sd if (g.s0 > 0 and g.target_price > 0 and sd > 0) else 0.0
+    side = "above" if g.target_price >= median_end else "below"
+    if g.kind == PredictionKind.TERMINAL:
+        tail = f"the shaded band is the {g.probability*100:.0f}% probability."
+    else:
+        # For a touch call the shaded area is the END-of-horizon mass; touching ever is at least that.
+        tail = (f"the shaded area is the chance of *ending* past the target — reaching it at any point "
+                f"before the deadline is at least that, and the calibrated estimate is {g.probability*100:.0f}%.")
+    return (f"Chart in words: from \\${g.s0:,.2f}, the median path ends near \\${median_end:,.2f} after "
+            f"{n} {_forecast_unit(g)}; the target \\${g.target_price:,.2f} sits about {sigma_dist:.1f}σ {side} "
+            f"that median — {tail}")
+
+
+def _render_forecast_result(g, headlines=None):
+    """PURE display of a forecast grade — headline, credibility, and the math/graph/news proof.
+
+    No side effects (saving is done once by the caller). ``headlines`` may be injected (offline demo);
+    otherwise recent news is fetched live.
+    """
+    unit = _forecast_unit(g)
+    is_band = bool(g.kind == PredictionKind.TERMINAL and g.band_pct)
     if g.kind == PredictionKind.TERMINAL:
         b = g.band_pct or 0.0
-        headline = (f"P({g.ticker} is within ±{b*100:g}% of \\${g.target_price:,.2f} "
-                    f"on {g.deadline_label}) ≈ {g.probability*100:.0f}%")
+        headline = (f"~{g.probability*100:.0f}% chance {g.ticker} lands within ±{b*100:g}% of "
+                    f"\\${g.target_price:,.2f} on {g.deadline_label}")
     else:
-        verb = "rise to" if g.direction == Direction.UP else "fall to"
-        headline = f"P({g.ticker} will {verb} \\${g.target_price:,.2f} by {g.deadline_label}) ≈ {g.probability*100:.0f}%"
+        verb = "rises to" if g.direction == Direction.UP else "falls to"
+        headline = (f"~{g.probability*100:.0f}% chance {g.ticker} {verb} \\${g.target_price:,.2f} "
+                    f"by {g.deadline_label}")
     st.subheader(headline)
 
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Calibrated probability", f"{g.probability*100:.0f}%",
+    # The calibrated probability is the single hero number; the raw model is a small caption beneath.
+    m1, m2 = st.columns(2)
+    m1.metric("Probability", f"{g.probability*100:.0f}%",
               help="The self-calibrated estimate — corrected by how this stock has actually behaved.")
-    m2.metric("Raw model (uncalibrated)", f"{g.raw_probability*100:.0f}%",
-              help="Straight from the closed-form GBM model, before history-based correction.")
-    m3.metric("Now → deadline", f"{g.n_days} {unit}")
+    m2.metric("Time to deadline", f"{g.n_days} {unit}")
+    if g.calibrated:
+        st.caption(f"Before history-based calibration, the raw volatility model said **{g.raw_probability*100:.0f}%**.")
+
+    # Sanity nudge: a directional call whose target is on the 'wrong' side of the current price.
+    if is_band:
+        st.caption("This is a symmetric **±band** call — *direction isn't used*; the probability is the "
+                   "two-sided mass around your target.")
+    elif g.s0 > 0:
+        _up = g.direction == Direction.UP
+        if (_up and g.target_price < g.s0) or (not _up and g.target_price > g.s0):
+            _sd = "below" if _up else "above"
+            _want = "DOWN" if _up else "UP"
+            st.warning(f"Heads up: you chose **{g.direction.value.upper()}** but \\${g.target_price:,.2f} is "
+                       f"**{_sd}** the current \\${g.s0:,.2f} — did you mean **{_want}**? The probability still "
+                       "answers exactly the question you asked.")
 
     if g.calibrated:
-        rec = g.self_cal_metrics.get("recalibrated", {})
-        best = (g.self_cal_metrics.get("full+") or g.self_cal_metrics.get("full")
-                or g.self_cal_metrics.get("+regime") or g.self_cal_metrics.get("+momentum") or rec)
-        ece, auc, n_test = rec.get("ece"), (best or {}).get("auc"), rec.get("n")
-        cred = f"When this model says 60%, it has historically hit ~60% on {g.ticker}"
+        # Report ONE model's held-out metrics (the deployed/best one), not a mix of two.
+        m = (g.self_cal_metrics.get("full+") or g.self_cal_metrics.get("full")
+             or g.self_cal_metrics.get("+regime") or g.self_cal_metrics.get("+momentum")
+             or g.self_cal_metrics.get("recalibrated", {}))
+        ece, auc, n_test = m.get("ece"), m.get("auc"), m.get("n")
+        cred = f"When this model states a probability, that bucket has historically landed close to it on {g.ticker}"
         if ece is not None and auc is not None:
-            cred += f" (calibration error ≈ {ece:.2f}, AUC ≈ {auc:.2f} — 0.5 is a coin flip)"
+            cred += (f" (calibration error ≈ {ece:.2f}, where 0 = perfectly honest; "
+                     f"AUC ≈ {auc:.2f}, where 0.5 = a coin flip)")
         st.success(f"Self-calibrated on {g.ticker}'s own {g.interval.label} history "
                    f"{g.history_start} → {g.history_end}. " + cred + ".")
         if n_test is not None and n_test < 60:
@@ -184,6 +250,8 @@ def _render_forecast_result(g):
                        "noisier than the daily model. Treat 30-min probabilities as directional.")
         if g.reliability:
             st.pyplot(plot_reliability(g.reliability, dark=True))
+            st.caption("Calibration curve — predicted vs actual hit-rate per probability bucket; dots on the "
+                       "diagonal mean the stated % matches what actually happened.")
     else:
         st.info("Not enough history to self-calibrate — showing the raw model probability (uncalibrated).")
     st.caption(f"Start price \\${g.s0:,.2f} · benchmark {g.benchmark_symbol} · as of {g.as_of} · "
@@ -202,43 +270,96 @@ def _render_forecast_result(g):
         )
         st.caption("Closed form behind the raw number:")
         st.code(formula_text(g), language=None)
+        if g.kind == PredictionKind.TERMINAL and g.band_pct:
+            st.caption("In plain terms: the target is a number of standard deviations away, and the model "
+                       "totals the bell-curve mass **between the two band edges** on the deadline.")
+        elif g.kind == PredictionKind.TERMINAL:
+            st.caption("In plain terms: the target is a number of standard deviations away, and the model "
+                       "adds up the bell-curve mass **past that point on the deadline**.")
+        else:  # touch — first-passage, not terminal mass
+            st.caption("In plain terms: the target is a number of standard deviations away, and the model "
+                       "totals the chance the price **reaches it at any point** before the deadline "
+                       "(first-passage) — higher than just ending past it.")
     with right:
-        verb = "rise" if g.direction == Direction.UP else "fall"
-        st.markdown(f"**News check** — does recent coverage back this *{verb}* call?")
-        try:
-            heads = recent_headlines(g.ticker)
-        except Exception:
-            heads = []
-        if heads:
-            lean = news_lean(heads, g.direction)
-            st.caption(f"✅ {lean['supports']} support · ❌ {lean['contradicts']} contradict · "
-                       f"➖ {lean['neutral']} neutral  (recent headlines vs your call)")
-            for h, lab in zip(heads[:5], lean["labels"]):
-                tag = {"supports": "✅", "contradicts": "❌", "neutral": "➖"}[lab]
-                line = f"{tag} **{h.title}**"
-                if h.publisher:
-                    line += f"  ·  {h.publisher}"
-                st.markdown(line)
-            st.caption("Shown as supporting/contradicting evidence — it explains the call, and isn't fed "
-                       "into the probability (that would risk look-ahead in the self-calibration).")
+        heads = headlines if headlines is not None else _safe_headlines(g.ticker)
+        if is_band:
+            # A ±band "be within" call is symmetric — direction doesn't affect it — so show news as
+            # neutral context (bullish/bearish), not supports/contradicts.
+            st.markdown("**News check** — recent coverage (context)")
+            if heads:
+                for h in heads[:5]:
+                    st.markdown(f"{h.mood} **{h.title}**" + (f"  ·  {h.publisher}" if h.publisher else ""))
+            else:
+                st.caption("No recent headlines available (offline, or none for this ticker).")
         else:
-            st.caption("No recent headlines available (offline, or none returned for this ticker).")
+            verb = "rise" if g.direction == Direction.UP else "fall"
+            st.markdown(f"**News check** — does recent coverage back this *{verb}* call?")
+            if heads:
+                shown = heads[:5]
+                lean = news_lean(shown, g.direction)      # tally over exactly what's shown
+                st.caption(f"✅ {lean['supports']} support · ❌ {lean['contradicts']} contradict · "
+                           f"➖ {lean['neutral']} neutral")
+                for h, lab in zip(shown, lean["labels"]):
+                    tag = {"supports": "✅", "contradicts": "❌", "neutral": "➖"}[lab]
+                    st.markdown(f"{tag} **{h.title}**" + (f"  ·  {h.publisher}" if h.publisher else ""))
+            else:
+                st.caption("No recent headlines available (offline, or none for this ticker).")
+        st.caption("Context only — not fed into the probability (that would risk look-ahead).")
     st.markdown("**The picture** — the price cone and where the probability comes from")
-    st.pyplot(plot_forecast_proof(g, dark=True))
+    _fig = plot_forecast_proof(g, dark=True)
+    st.pyplot(_fig)
+    st.caption(_cone_alt_text(g))
 
-    # Persist this prediction for the session so it isn't a throwaway calculation.
-    st.session_state.setdefault("forecasts", []).append({
-        "saved": str(g.as_of),
-        "ticker": g.ticker,
-        "resolution": g.interval.value,
-        "type": "at-the-date" if g.kind == PredictionKind.TERMINAL else "touch-before",
-        "direction": g.direction.value,
-        "target": round(g.target_price, 2),
-        "band_±%": (round(g.band_pct * 100, 2) if g.band_pct else None),
-        "deadline": g.deadline_label,
-        "probability_%": round(g.probability * 100),
-        "calibrated": g.calibrated,
-    })
+    # ---- take this result with you ----
+    if is_band:
+        share = (f"{g.ticker}: ~{g.probability*100:.0f}% chance it's within ±{(g.band_pct or 0)*100:g}% "
+                 f"of ${g.target_price:,.0f} on {g.deadline_label}")
+    else:
+        _v = "rises to" if g.direction == Direction.UP else "falls to"
+        share = f"{g.ticker}: ~{g.probability*100:.0f}% chance it {_v} ${g.target_price:,.0f} by {g.deadline_label}"
+    share += f"  ·  calibrated estimate · analyst-scorecard ({g.interval.label})"
+    sc1, sc2 = st.columns([3, 1])
+    with sc1:
+        st.caption("📋 Copy this result")
+        st.code(share, language=None)
+    _buf = io.BytesIO()
+    _fig.savefig(_buf, format="png", dpi=150, bbox_inches="tight")
+    sc2.caption("🖼️ Save chart")            # aligns the button with the code block beside it
+    sc2.download_button("⬇️ Chart PNG", data=_buf.getvalue(), file_name=f"{g.ticker}_forecast.png",
+                        mime="image/png", key=f"cone_png_{g.ticker}_{g.deadline_label}")
+
+
+def _demo_forecast():
+    """A frozen grade + canned headlines so the full proof renders with zero network.
+
+    The probabilities are DERIVED from the frozen parameters (not hand-picked) so every surface — the
+    hero %, the math table, the cone, and the alt text — agrees.
+    """
+    from analyst_scorecard.forecast.calibration import ReliabilityBin
+    from analyst_scorecard.forecast.explanation import NewsHeadline
+    from analyst_scorecard.forecast.live import ForecastGrade
+    from analyst_scorecard.forecast.probability import touch_probability
+    s0, K, n, mu, sig = 278.50, 300.0, 63, 0.00012, 0.0175
+    raw = touch_probability(s0, K, n, mu, sig, Direction.UP)   # the real closed-form number for these inputs
+    prob = round(raw * 0.9, 2)                                  # a mild, plausible calibration pull-down
+    g = ForecastGrade(
+        ticker="AAPL", direction=Direction.UP, target_price=K, as_of=date(2026, 6, 1),
+        deadline=date(2026, 9, 1), n_days=n, s0=s0, raw_probability=round(raw, 2), probability=prob,
+        calibrated=True, kind=PredictionKind.TOUCH, band_pct=None, interval=BarInterval.DAILY,
+        deadline_label="2026-09-01", drift_bar=mu, vol_bar=sig,
+        self_cal_metrics={"recalibrated": {"ece": 0.04, "auc": 0.61, "n": 180}, "full+": {"ece": 0.04, "auc": 0.63}},
+        reliability=[ReliabilityBin(0.0, 0.1, 42, 0.06, 0.05), ReliabilityBin(0.1, 0.2, 60, 0.15, 0.17),
+                     ReliabilityBin(0.2, 0.35, 38, 0.27, 0.24), ReliabilityBin(0.35, 0.6, 22, 0.43, 0.45)],
+        benchmark_symbol="^GSPC", history_start=date(2020, 6, 1), history_end=date(2026, 6, 1),
+    )
+    heads = [
+        NewsHeadline("Apple beats earnings, shares surge to record", "MarketWire", None, None, 0.6),
+        NewsHeadline("Analysts raise Apple price targets on AI optimism", "StreetFeed", None, None, 0.5),
+        NewsHeadline("Apple faces antitrust probe in Europe", "DailyNews", None, None, -0.4),
+        NewsHeadline("iPhone demand concerns weigh on suppliers", "TradeDesk", None, None, -0.3),
+        NewsHeadline("Apple unveils new lineup at fall event", "PRfeed", None, None, 0.0),
+    ]
+    return g, heads
 
 
 def _intel_summary_block(rec):
@@ -287,7 +408,7 @@ def _render_intel_sections(rep):
         f2.metric("Benchmark return", f"{lv.benchmark_return*100:+.1f}%")
         g2.metric("Direction gate", "PASS ✅" if lv.direction_pass else "FAIL ❌")
     if rep.forward is not None:
-        st.metric(f"Model odds of reaching \\${rec.target_price:,.0f} within ~12 months",
+        st.metric(f"Model odds of reaching ${rec.target_price:,.0f} within ~12 months",
                   f"{rep.forward.probability*100:.0f}%",
                   help="From the calibrated forecast engine (touch-by-deadline), self-calibrated on this stock.")
     elif rep.forward_error:
@@ -405,11 +526,11 @@ with tab_hist:
             f"(out of {result.n_ingested + result.n_ingest_dropped} raw rows)."
         )
 
-        st.header("Historical Leaderboard")
+        st.subheader("Historical Leaderboard")
         st.dataframe(_leaderboard_for_display(result.leaderboard), use_container_width=True, hide_index=True, column_config=_LB_COLS)
         st.pyplot(plot_leaderboard(result.leaderboard, dark=True))
 
-        st.header("Historical Analyst Profile")
+        st.subheader("Historical Analyst Profile")
         hist_names = {s.analyst_name: s.analyst_id for s in result.leaderboard.rows}
         hist_choice = st.selectbox("Choose an analyst (historical)", list(hist_names), key="hist_analyst")
         hist_aid = hist_names[hist_choice]
@@ -530,34 +651,23 @@ with tab_live:
 # ===== Tab 4: forecast (probability of a FUTURE prediction) ===========================
 with tab_fcast:
     st.header("🎯 Will this price target happen?")
-    st.success(
-        "**You enter:** a ticker, a target price, and a deadline.  →  **You get:** a calibrated probability, "
-        "a plain-English verdict, and the proof behind it (the math, a price-cone chart, and recent news "
-        "for/against). *This is the main tool — start here.*"
-    )
     st.caption(
-        "Under the hood: the probability comes from the stock's own volatility (a closed-form model), then "
-        "is **self-calibrated on that ticker's own history** so it reflects how the stock has actually "
-        "behaved. Needs internet + `yfinance`."
+        "Enter a ticker, a target price, and a deadline → a **calibrated probability** plus the proof "
+        "(the math, a price-cone chart, and recent news for/against). Live prices need internet + `yfinance`."
     )
-    st.warning(
-        "This is a **calibrated estimate, not a crystal ball** (a live, point-in-time snapshot — not "
-        "reproducible). Judge it by **calibration** (does 70% mean 70%?) and **discrimination** (AUC) "
-        "— **not “% accuracy.”** On held-out sample backtests the model stays well-calibrated "
-        "(**ECE ≈ 0.01**): **daily** terminal **AUC ≈ 0.67** (48k blind predictions); **30-min intraday "
-        "AUC ≈ 0.60** (thinner ~60-day history — the default, but weaker). 0.5 = a coin flip. "
-        "The live path is **price-only**; news below is shown as context."
-    )
-    st.caption("Pick a **resolution** and a **question**, then get a calibrated probability with a full "
-               "proof (the maths, a picture, and recent news).")
+    _dcol1, _dcol2 = st.columns([3, 1])
+    _dcol1.caption("New here or offline? Preview the full result with one click →")
+    if _dcol2.button("▶️ Worked example", key="f_demo", help="See a frozen sample result — no internet needed"):
+        _dg, _dheads = _demo_forecast()
+        st.session_state["forecast_view"] = {"grade": _dg, "headlines": _dheads, "demo": True}
 
+    st.markdown("**Enter your prediction**")
     ci1, ci2 = st.columns(2)
     interval_label = ci1.radio(
         "Resolution",
-        ["⏱️ 30-min bars (intraday — default)", "📅 Daily (longer horizon)"],
+        ["📅 Daily — weeks to months (most reliable)", "⏱️ 30-min — intraday, near-term (weaker)"],
         key="f_interval",
-        help="30-min: near-term, intraday deadlines, calibrated on ~60 days of bars (thinner). "
-             "Daily: weeks–months out, calibrated on years of history (stronger).",
+        help="Daily: calibrated on years of history (stronger). 30-min: only ~60 days of bars (thinner, near-term).",
     )
     is_intraday = interval_label.startswith("⏱️")
     interval = BarInterval.MIN30 if is_intraday else BarInterval.DAILY
@@ -566,13 +676,19 @@ with tab_fcast:
         ["🎯 It will **be at** this price ON the deadline",
          "📈 It will **touch** this price ANY TIME before the deadline"],
         key="f_kind",
+        help=("'Be at' grades the closing price ON the deadline and adds a ±tolerance band (landing on an "
+              "exact number is hard). 'Touch' counts a hit if the price reaches the target at any point "
+              "before the deadline — usually a higher probability."),
     )
     is_terminal = kind_label.startswith("🎯")
 
     c1, c2, c3 = st.columns(3)
     f_ticker = c1.text_input("Ticker", value="AAPL", key="f_ticker", help="e.g. AAPL, MSFT, NVDA")
     f_dir_label = c2.selectbox("Direction", ["UP — rises to target", "DOWN — falls to target"], key="f_dir",
-                               help="Which way you expect it to move to reach the target. Orients the trend signals.")
+                               disabled=is_terminal,   # a ±band 'be at' call is symmetric — direction is unused
+                               help=("Not used for a 'be at' ±band call (it's symmetric around the target). "
+                                     "Only matters for a 'touch' call." if is_terminal
+                                     else "Which way you expect it to move to reach the target. Orients the trend signals."))
     f_target = c3.number_input("Target price ($)", min_value=0.01, value=300.0, step=1.0, key="f_target")
 
     if is_intraday:
@@ -605,6 +721,17 @@ with tab_fcast:
     else:
         f_band_pct = None
 
+    with st.expander("How accurate is this, really? (calibration & the numbers)"):
+        st.markdown(
+            "It's a **calibrated estimate, not a crystal ball** — judge it by *calibration* (when it says "
+            "70%, does it happen ~70%?), not raw accuracy. **Across all backtested tickers (aggregate):** "
+            "**ECE ≈ 0.01** (well calibrated); **daily AUC ≈ 0.67** across 48k blind predictions; **30-min "
+            "intraday AUC ≈ 0.60** (thinner ~60-day history, weaker). AUC 0.5 = a coin flip. These are "
+            "app-wide figures — the ECE/AUC in the green box with each estimate is measured on *that one "
+            "ticker*, so it will differ. The live path is price-only; news is shown as context, never fed "
+            "into the number."
+        )
+
     if st.button("Estimate probability", type="primary", key="f_go"):
         direction = Direction.UP if f_dir_label.startswith("UP") else Direction.DOWN
         kind = PredictionKind.TERMINAL if is_terminal else PredictionKind.TOUCH
@@ -619,16 +746,59 @@ with tab_fcast:
         except LiveGradeError as e:
             st.error(str(e))
         except Exception as e:  # network / library surprises -> never crash the page
-            st.error(f"Couldn't grade that prediction: {e}")
+            st.error(f"Couldn't grade that prediction: {e}  ·  No internet? Try the **▶️ Worked example** button at the top.")
         else:
-            _render_forecast_result(g)
+            st.session_state["forecast_view"] = {
+                "grade": g, "headlines": None, "demo": False,
+                "sig": (f_ticker.strip().upper(), float(f_target), str(deadline), f_dir_label,
+                        kind_label, interval_label, f_band_pct, (f_bench or "^GSPC").strip(), years),
+            }
+            _save_forecast(g)
 
-    # ---- My predictions (persisted for this session; downloadable) ----
+    # Sticky result — survives reruns (slider nudges, Clear, downloads, tab switches), like the intel tab.
+    view = st.session_state.get("forecast_view")
+    if view and view.get("grade") is not None:
+        if view["demo"]:
+            _dg = view["grade"]
+            db1, db2 = st.columns([5, 1])
+            db1.info(f"🧪 **Demo data** — a fixed **{_dg.ticker} → \\${_dg.target_price:,.0f}** example, not "
+                     "live. It does **not** reflect the ticker/target you typed above. Enter your own and hit "
+                     "**Estimate** for a live result.")
+            if db2.button("Hide example", key="f_demo_hide"):
+                st.session_state.pop("forecast_view", None)
+                st.rerun()
+        elif "sig" in view:
+            _cur = (f_ticker.strip().upper(), float(f_target), str(deadline), f_dir_label,
+                    kind_label, interval_label, f_band_pct, (f_bench or "^GSPC").strip(), years)
+            if _cur != view["sig"]:
+                st.warning("⚠️ Inputs changed since this estimate — the result below still reflects the "
+                           "**previous** inputs. Click **Estimate probability** to refresh.")
+        _render_forecast_result(view["grade"], headlines=view["headlines"])
+        if not view["demo"]:
+            st.caption("✅ Saved to **My predictions** below — tweak any input and re-estimate to compare runs.")
+
+    # ---- My predictions (persisted for this session; downloadable + restorable) ----
     saved = st.session_state.get("forecasts", [])
+    # Restore is ALWAYS available (offline / returning users), even before any row exists this session.
+    with st.expander("📂 Restore saved predictions (upload a downloaded my_predictions.json)"):
+        restored = st.file_uploader("my_predictions.json", type="json", key="fc_up", label_visibility="collapsed")
+        if restored is not None:
+            try:
+                rows = json.loads(restored.getvalue().decode("utf-8"))
+            except Exception:
+                st.error("Couldn't read that file — expected the JSON this app exports.")
+            else:
+                if isinstance(rows, list):
+                    seen = {(r.get("ticker"), r.get("target"), r.get("deadline"), r.get("type")) for r in saved}
+                    new_rows = [r for r in rows if isinstance(r, dict)
+                                and (r.get("ticker"), r.get("target"), r.get("deadline"), r.get("type")) not in seen]
+                    if new_rows:
+                        st.session_state.setdefault("forecasts", []).extend(new_rows)
+                        st.rerun()
     if saved:
         st.divider()
         st.subheader("📌 My predictions (this session)")
-        st.caption("Saved as you estimate. Download to keep them — a forecast you can't revisit is just a calculator.")
+        st.caption("Saved as you estimate. Download to keep them across sessions, then restore them above.")
         st.dataframe(pd.DataFrame(saved), use_container_width=True, hide_index=True)
         cdl, ccl = st.columns(2)
         cdl.download_button("⬇️ Download as JSON", data=json.dumps(saved, indent=2),

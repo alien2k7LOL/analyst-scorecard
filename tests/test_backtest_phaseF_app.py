@@ -11,13 +11,12 @@ def test_app_renders_historical_tab():
     at = AppTest.from_file(str(REPO_ROOT / "app.py"), default_timeout=180).run()
     assert list(at.exception) == [], at.exception
 
-    headers = [h.value for h in at.header]
     subheaders = [h.value for h in at.subheader]
     # the synthetic views still render (the leaderboard is now a subheader under the Proof-1 intro)
     assert "Leaderboard — ranked by Beat-the-Market" in subheaders
-    # the historical views render
-    assert "Historical Leaderboard" in headers
-    assert "Historical Analyst Profile" in headers
+    # the historical views render (now subheaders too, so the two Proof tabs match in size)
+    assert "Historical Leaderboard" in subheaders
+    assert "Historical Analyst Profile" in subheaders
     # (the historical call-level drill-down is now inside an expander; its table is counted below)
 
     # the historical analyst selector is populated from the sample (perma-bull + skilled present)

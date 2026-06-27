@@ -44,8 +44,16 @@ def build_math(grade) -> list[MathFactor]:
     sd = sigma * np.sqrt(n)                       # terminal log-vol over the horizon
     median = s0 * float(np.exp(mu * n))           # middle of the cone at the deadline
     up = grade.direction.value == "up"
-    log_dist = float(np.log(grade.target_price / s0)) if up else float(np.log(s0 / grade.target_price))
-    dist_sigma = log_dist / sd
+    is_band = grade.kind == PredictionKind.TERMINAL and grade.band_pct
+    if is_band:
+        # A ±band 'be within' call is symmetric — show the unsigned distance to the band centre,
+        # not a signed value derived from a direction the probability ignores.
+        dist_sigma = abs(float(np.log(grade.target_price / s0))) / sd
+        dist_label, dist_val = "Distance to band centre", f"{dist_sigma:.2f} σ"
+    else:
+        log_dist = float(np.log(grade.target_price / s0)) if up else float(np.log(s0 / grade.target_price))
+        dist_sigma = log_dist / sd
+        dist_label, dist_val = "Distance to target", f"{dist_sigma:+.2f} σ"
 
     factors = [
         MathFactor("Start price (S₀)", f"${s0:,.2f}", "where the stock sits right now"),
@@ -57,7 +65,7 @@ def build_math(grade) -> list[MathFactor]:
                    "how many bars from now until the deadline"),
         MathFactor("Projected median price", f"${median:,.2f}",
                    "S₀·e^(μ·T) — the centre of the cone at the deadline"),
-        MathFactor("Distance to target", f"{dist_sigma:+.2f} σ",
+        MathFactor(dist_label, dist_val,
                    "how many standard deviations away the target is (smaller = easier)"),
         MathFactor("Raw model probability", f"{grade.raw_probability*100:.1f}%",
                    "straight from the closed-form formula below"),
@@ -97,19 +105,66 @@ class NewsHeadline:
         return "🟢 positive" if self.sentiment > 0.15 else "🔴 negative" if self.sentiment < -0.15 else "⚪ neutral"
 
 
-_POS = {"beat", "beats", "surge", "surges", "soar", "soars", "jump", "jumps", "rally", "record",
-        "growth", "profit", "gains", "gain", "bullish", "outperform", "upgrade", "raise", "raised",
-        "strong", "tops", "wins", "approval", "expand", "expands", "rebound", "buy"}
-_NEG = {"miss", "misses", "plunge", "plunges", "sink", "sinks", "fall", "falls", "drop", "drops",
-        "loss", "losses", "weak", "bearish", "downgrade", "cut", "cuts", "lawsuit", "probe",
-        "slump", "warns", "warning", "slashes", "recall", "halt", "fraud", "selloff", "sell"}
+# Explicit word sets (inflections included) rather than stems — avoids false hits like "mission"→miss
+# or "topic"→top. Deliberately NO bare "fall" (the season: "fall event" is not a price drop) or bare
+# "sell" ("sells record units" isn't bearish); the directional inflections carry those cases.
+_POS = {"beat", "beats", "beating", "surge", "surges", "surged", "soar", "soars", "soared", "jump",
+        "jumps", "jumped", "rally", "rallies", "rallied", "record", "growth", "profit", "profits",
+        "gains", "gain", "bullish", "outperform", "outperforms", "outperformed", "upgrade", "upgraded",
+        "upgrades", "raise", "raised", "raises", "strong", "strength", "tops", "topped", "wins",
+        "approval", "approved", "expand", "expands", "rebound", "rebounds", "rebounded", "optimistic",
+        "tailwind", "tailwinds", "climbs", "climbed", "accelerate", "accelerates", "boost", "boosts",
+        "boosted", "momentum", "buy"}
+_NEG = {"miss", "misses", "missed", "plunge", "plunges", "plunged", "sink", "sinks", "sank", "falls",
+        "fell", "falling", "drop", "drops", "dropped", "decline", "declines", "declined", "loss",
+        "losses", "weak", "weakness", "weakens", "bearish", "downgrade", "downgraded", "downgrades",
+        "cut", "cuts", "slash", "slashes", "slashed", "lawsuit", "probe", "slump", "slumps", "slumped",
+        "tumble", "tumbles", "tumbled", "warn", "warns", "warning", "recall", "fraud", "selloff",
+        "sell-off", "headwind", "headwinds", "concern", "concerns", "disappoint", "disappoints",
+        "disappointing", "plummet", "plummets", "plummeted", "halt", "halts"}
+
+# Hard negators: a sentiment word in the few tokens AFTER one of these gets its polarity FLIPPED, so
+# "not a strong buy" reads negative and "no major concerns" reads positive. This was the single biggest
+# source of wrong signs — a bag-of-words read can't see that "not" reverses everything after it.
+_NEGATORS = {"not", "no", "never", "without", "isn't", "isnt", "aren't", "arent", "wasn't", "wasnt",
+             "weren't", "werent", "won't", "wont", "cannot", "can't", "cant", "fails", "failed",
+             "failing", "lacks", "lacking", "avoids", "avoided"}
+# Finance idioms where a scary word is actually GOOD news (relief) — read as a phrase so the bare
+# negative word inside ("concerns", "loss") doesn't drag the sign the wrong way.
+_RELIEF = {"ease", "eases", "eased", "easing", "allay", "allays", "allayed", "soothe", "soothes",
+           "calm", "calms", "calmed", "shrug", "shrugs", "shrugged"}
+_WORRY = {"concern", "concerns", "fear", "fears", "worry", "worries", "jitters", "doubt", "doubts",
+          "selloff", "sell-off", "slump"}
+_SHRINK = {"narrower", "narrowing", "narrows", "smaller", "slimmer", "shrinking", "shrinks"}
 
 
 def score_sentiment(text: str) -> float:
-    """Tiny finance lexicon read of a headline: (pos − neg) / (pos + neg), in [-1, 1]."""
-    words = [w.strip(".,!?:;'\"()").lower() for w in (text or "").split()]
-    pos = sum(w in _POS for w in words)
-    neg = sum(w in _NEG for w in words)
+    """Finance headline sentiment in [-1, 1], sign-aware: handles negation and a few relief idioms.
+
+    Net = (#positive − #negative) / (#positive + #negative) over the lexicon hits, but BEFORE counting:
+      * a hard negator ("not", "no", "fails to"…) in the preceding 3 tokens flips a word's polarity, and
+      * relief idioms ("concerns ease", "ease fears", "narrower loss") are read as positive as a whole,
+    so the common cases that made the old word-count give the wrong sign now come out right.
+    """
+    toks = [w.strip(".,!?:;'\"()[]—").lower() for w in (text or "").split()]
+    toks = [t for t in toks if t]
+    pos = neg = 0
+    i, n = 0, len(toks)
+    while i < n:
+        w = toks[i]
+        nxt = toks[i + 1] if i + 1 < n else ""
+        # relief idioms (either word order) and "narrower loss" → positive; consume both tokens
+        if (w in _RELIEF and nxt in _WORRY) or (w in _WORRY and nxt in _RELIEF) \
+                or (w in _SHRINK and nxt in {"loss", "losses", "deficit"}):
+            pos += 1
+            i += 2
+            continue
+        polarity = 1 if w in _POS else (-1 if w in _NEG else 0)
+        if polarity:
+            if any(toks[j] in _NEGATORS or toks[j].endswith("n't") for j in range(max(0, i - 3), i)):
+                polarity = -polarity            # a negator just before this word reverses it
+            pos, neg = (pos + 1, neg) if polarity > 0 else (pos, neg + 1)
+        i += 1
     if pos + neg == 0:
         return 0.0
     return (pos - neg) / (pos + neg)

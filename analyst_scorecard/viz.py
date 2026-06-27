@@ -154,7 +154,8 @@ def plot_leaderboard(leaderboard: Leaderboard, *, dark: bool = False):
     ax.barh(names, values, color=colors)
     ax.axvline(0, color=_ref_color(dark), linewidth=1.2)
     ax.set_xlabel("Beat-the-Market (mean excess return vs index, %)")
-    ax.set_title("Analyst Leaderboard — would you have beaten the index?")
+    if not dark:  # in-app the Streamlit heading already titles this; keep a title for PNG/light export
+        ax.set_title("Analyst Leaderboard — would you have beaten the index?")
     for y, v in enumerate(values):
         ax.text(v + (0.5 if v >= 0 else -0.5), y, f"{v:+.1f}%",
                 va="center", ha="left" if v >= 0 else "right", fontsize=9,
@@ -180,24 +181,34 @@ def plot_analyst_profile(score: AnalystScore, *, dark: bool = False):
         hi = max(max(x for x, *_ in pts), max(y for _, y, *_ in pts))
         pad = max(5.0, (hi - lo) * 0.1)
         lim = (lo - pad, hi + pad)
+        ink = _DARK_INK if dark else "#222222"
         # y = x reference: "matched the index"
-        ax.plot(lim, lim, color=_ref_color(dark), linestyle="--", linewidth=1, label="matches the index")
+        ax.plot(lim, lim, color=_ref_color(dark), linestyle="--", linewidth=1)
         for x, y, ticker, beat in pts:
-            color = _BEAT_COLOR if (beat is not None and beat > 0) else _LAG_COLOR
-            ax.scatter(x, y, color=color, s=45, edgecolor="white", zorder=3)
-            ax.annotate(ticker, (x, y), fontsize=7, xytext=(3, 3), textcoords="offset points")
+            beat_pos = beat is not None and beat > 0
+            # Encode beat/lag by SHAPE as well as color so it survives colorblind/grayscale (WCAG 1.4.1).
+            ax.scatter(x, y, color=_BEAT_COLOR if beat_pos else _LAG_COLOR,
+                       marker="^" if beat_pos else "v", s=55, edgecolor="white", zorder=3)
+            ax.annotate(ticker, (x, y), fontsize=7, xytext=(3, 3), textcoords="offset points", color=ink)
         ax.set_xlim(lim)
         ax.set_ylim(lim)
-        ax.fill_between(lim, lim, [lim[1], lim[1]], color=_BEAT_COLOR, alpha=0.06)  # above line
+        ax.fill_between(lim, lim, [lim[1], lim[1]], color=_BEAT_COLOR, alpha=0.10)  # above line
+        from matplotlib.lines import Line2D
+        handles = [
+            Line2D([], [], color=_ref_color(dark), linestyle="--", label="matches the index"),
+            Line2D([], [], marker="^", linestyle="", color=_BEAT_COLOR, label="beat the index ▲"),
+            Line2D([], [], marker="v", linestyle="", color=_LAG_COLOR, label="lagged the index ▼"),
+        ]
+        ax.legend(handles=handles, loc="lower right", fontsize=8)
     else:
-        ax.text(0.5, 0.5, "no directional calls", ha="center", va="center", transform=ax.transAxes)
+        ax.text(0.5, 0.5, "no directional calls", ha="center", va="center", transform=ax.transAxes,
+                color=_DARK_INK if dark else "#222222")
 
     bm = score.beat_market
     bm_str = "n/a" if bm is None else f"{bm * 100:+.1f}%"
     ax.set_xlabel("Index (benchmark) return over the horizon (%)")
     ax.set_ylabel("Return from following the call (%)")
     ax.set_title(f"{score.analyst_name} — above the line beats the index\nMean beat-market: {bm_str}")
-    ax.legend(loc="lower right", fontsize=8)  # out of the shaded 'beat' region (upper-left)
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
     return _apply_theme(fig, [ax], dark)
@@ -215,8 +226,8 @@ def plot_reliability(bins, *, dark: bool = False):
                    edgecolor="white" if dark else "#1b4a73", zorder=3)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.set_xlabel("Predicted touch probability")
-    ax.set_ylabel("Actual touch frequency")
+    ax.set_xlabel("Predicted probability")      # kind-neutral: used for touch AND terminal forecasts
+    ax.set_ylabel("Actual frequency")
     ax.set_title("Calibration — points on the dashed line are trustworthy")
     ax.legend(loc="lower right", fontsize=8)  # out of the diagonal's path through upper-left
     ax.grid(True, alpha=0.2)
@@ -265,7 +276,11 @@ def plot_forecast_proof(grade, *, dark: bool = False):
     # -- Panel B: the terminal distribution at the deadline --
     m = np.log(s0) + mu * n
     sd = sigma * np.sqrt(n)
-    xs = np.linspace(max(0.01, s0 * np.exp(mu * n - 3.6 * sd)), s0 * np.exp(mu * n + 3.6 * sd), 400)
+    # Always keep the target K inside the window, so a far-out target shows as a tail at ~0% rather
+    # than an empty (apparently-broken) chart.
+    lo = max(0.01, min(s0 * np.exp(mu * n - 3.6 * sd), K * 0.97))
+    hi = max(s0 * np.exp(mu * n + 3.6 * sd), K * 1.03)
+    xs = np.linspace(lo, hi, 400)
     pdf = np.exp(-((np.log(xs) - m) ** 2) / (2 * sd ** 2)) / (xs * sd * np.sqrt(2 * np.pi))
     axR.plot(xs, pdf, color="#4c9be8", lw=1.6)
     if terminal and band:
@@ -273,21 +288,49 @@ def plot_forecast_proof(grade, *, dark: bool = False):
         lab = f"within ±{band*100:g}% of target"
     elif up:
         mask = xs >= K
-        lab = "ends at/above target"
+        lab = "ends at/above target" if terminal else "ends past target (a floor)"
     else:
         mask = xs <= K
-        lab = "ends at/below target"
+        lab = "ends at/below target" if terminal else "ends past target (a floor)"
     axR.fill_between(xs[mask], pdf[mask], color=hit_color, alpha=0.55, label=lab)
     axR.axvline(K, color=tgt_color, ls="--", lw=1.2)
+    # The big number printed ON the figure must be the CALIBRATED probability — the one the hero metric,
+    # the headline, the copy-string and the alt text all show — so the proof picture can never contradict
+    # the verdict beside it. The shaded area is the model's RAW mass (for touch it also undersells the
+    # answer, since touch ≥ terminal); when calibration moved the number we name that gap explicitly.
+    raw_pct, cal_pct = grade.raw_probability * 100, grade.probability * 100
+    moved = grade.calibrated and round(raw_pct) != round(cal_pct)
+    if not terminal:
+        axR.text(0.5, 0.93, f"calibrated touch by deadline ≈ {cal_pct:.0f}%",
+                 transform=axR.transAxes, ha="center", fontsize=10, fontweight="bold",
+                 color=_DARK_INK if dark else "#1a7a3f")
+        if moved:
+            axR.text(0.5, 0.855, f"(raw model {raw_pct:.0f}%; shaded = terminal mass, lower than touch)",
+                     transform=axR.transAxes, ha="center", fontsize=8,
+                     color=_DARK_INK if dark else "#555555")
+    elif moved:
+        axR.text(0.5, 0.93, f"calibrated ≈ {cal_pct:.0f}%",
+                 transform=axR.transAxes, ha="center", fontsize=10, fontweight="bold",
+                 color=_DARK_INK if dark else "#1a7a3f")
+        axR.text(0.5, 0.855, f"(shaded = raw model {raw_pct:.0f}%)", transform=axR.transAxes,
+                 ha="center", fontsize=8, color=_DARK_INK if dark else "#555555")
     axR.set_xlabel("price at the deadline ($)")
     axR.set_ylabel("probability density")
-    axR.set_title("Shaded area = the probability" if terminal else "Terminal mass (touch ≥ this)")
+    if mask.sum() == 0 or round(grade.probability * 100) == 0:
+        axR.set_title("Target sits far out in the tail → ≈0%")
+    elif terminal:
+        axR.set_title("Shaded = raw model mass" if moved else "Shaded area = the probability")
+    else:
+        axR.set_title("Shaded = 'ends past target'; touch is higher (above)")
     axR.legend(loc="best", fontsize=8)
     axR.grid(True, alpha=0.2)
 
-    fig.suptitle(f"P ≈ {grade.probability*100:.0f}%   ·   {grade.kind.value} · {grade.interval.label}",
-                 fontsize=12, color=_DARK_INK if dark else "#222222")
-    fig.tight_layout(rect=(0, 0, 1, 0.95))
+    if not dark:  # in-app the hero Probability metric already shows this; keep it for PNG/light export
+        fig.suptitle(f"P ≈ {grade.probability*100:.0f}%   ·   {grade.kind.value} · {grade.interval.label}",
+                     fontsize=12, color="#222222")
+        fig.tight_layout(rect=(0, 0, 1, 0.95))
+    else:
+        fig.tight_layout()
     return _apply_theme(fig, [axL, axR], dark)
 
 
@@ -315,7 +358,8 @@ def plot_recommendation_chart(report, *, dark: bool = False):
     ax.scatter([x[-1]], [last], color="#4c9be8", s=40, zorder=3, edgecolor="white")
     ax.set_xlabel("trading days since the call")
     ax.set_ylabel("indexed to 100 at the call")
-    ax.set_title(f"{report.rec.ticker} since the {report.rec.rating} call vs {report.benchmark_symbol}")
+    if not dark:  # the in-app Streamlit heading already titles this; keep it for PNG/light export
+        ax.set_title(f"{report.rec.ticker} since the {report.rec.rating} call vs {report.benchmark_symbol}")
     ax.legend(loc="best", fontsize=8)
     ax.grid(True, alpha=0.2)
     fig.tight_layout()
