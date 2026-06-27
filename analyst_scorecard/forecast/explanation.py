@@ -170,6 +170,104 @@ def score_sentiment(text: str) -> float:
     return (pos - neg) / (pos + neg)
 
 
+# --------------------------------------------------------------------------------------
+# Sentiment scorers — a seam so the lexicon (offline, deterministic) can be upgraded to an
+# LLM read (catches sarcasm and long multi-clause reversals the word lists never will), with
+# the lexicon as the always-available fallback. News is context-only (never fed into the
+# probability), so the LLM's non-determinism is safe here.
+# --------------------------------------------------------------------------------------
+
+DEFAULT_SENTIMENT_MODEL = "claude-haiku-4-5-20251001"   # light classification → the fast model
+
+
+class SentimentScorer(ABC):
+    """Scores headlines in [-1, 1]: +1 bullish for the stock, −1 bearish, 0 neutral."""
+
+    @abstractmethod
+    def score_many(self, texts: list[str]) -> list[float]: ...
+
+    def score(self, text: str) -> float:
+        return self.score_many([text])[0]
+
+
+class LexiconSentimentScorer(SentimentScorer):
+    """The deterministic, offline word-list read (negation- and relief-idiom-aware)."""
+
+    def score_many(self, texts: list[str]) -> list[float]:
+        return [score_sentiment(t) for t in texts]
+
+
+_LLM_SENTIMENT_SYSTEM = (
+    "You score financial news headlines for what they imply about the company's STOCK. "
+    "For each headline return one number in [-1, 1]: +1 strongly bullish, -1 strongly bearish, "
+    "0 neutral/factual. Account for negation ('not a strong buy' is bearish), relief idioms "
+    "('demand concerns ease' is bullish), sarcasm, and that analyst rating/target changes drive "
+    "sentiment (an upgrade or raised target is bullish; a downgrade or cut is bearish). Return "
+    "exactly one score per headline, in the same order, and nothing else."
+)
+
+
+class LLMSentimentScorer(SentimentScorer):
+    """Anthropic-backed scorer; one batched structured call for all headlines.
+
+    Needs ``ANTHROPIC_API_KEY`` (or an injected ``client``). Any failure — missing key at call
+    time, network error, schema/length mismatch — silently falls back to the lexicon, so a news
+    panel can never crash or block on the model.
+    """
+
+    def __init__(self, client=None, model: str = DEFAULT_SENTIMENT_MODEL,
+                 fallback: Optional[SentimentScorer] = None, max_tokens: int = 512):
+        self._fallback = fallback or LexiconSentimentScorer()
+        self._model = model
+        self._max_tokens = max_tokens
+        if client is None:
+            import os
+            if not os.environ.get("ANTHROPIC_API_KEY"):
+                raise RuntimeError(
+                    "LLMSentimentScorer needs ANTHROPIC_API_KEY or an injected client; "
+                    "use LexiconSentimentScorer for the offline path."
+                )
+            import anthropic  # lazy — keeps the package import-clean offline
+            client = anthropic.Anthropic()
+        self._client = client
+
+    def score_many(self, texts: list[str]) -> list[float]:
+        texts = list(texts)
+        if not texts:
+            return []
+        try:
+            return self._llm_scores(texts)
+        except Exception:
+            return self._fallback.score_many(texts)   # never break a context-only panel
+
+    def _llm_scores(self, texts: list[str]) -> list[float]:
+        from pydantic import BaseModel, Field
+
+        class _Scores(BaseModel):
+            scores: list[float] = Field(description="one sentiment score in [-1,1] per headline, in order")
+
+        numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
+        resp = self._client.messages.parse(
+            model=self._model, max_tokens=self._max_tokens, system=_LLM_SENTIMENT_SYSTEM,
+            messages=[{"role": "user", "content": numbered}], output_format=_Scores,
+        )
+        parsed = resp.parsed_output
+        if parsed is None or len(parsed.scores) != len(texts):
+            raise RuntimeError("sentiment LLM returned no/again-shaped output")
+        return [max(-1.0, min(1.0, float(s))) for s in parsed.scores]   # clamp to the contract
+
+
+def default_sentiment_scorer() -> SentimentScorer:
+    """LLM scorer when a key is present (auto-upgrade, lexicon fallback); lexicon otherwise."""
+    import os
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        try:
+            return LLMSentimentScorer()
+        except Exception:
+            pass
+    return LexiconSentimentScorer()
+
+
 def classify_support(sentiment: float, direction) -> str:
     """Does a headline's sentiment SUPPORT or CONTRADICT the call's direction? (the point of news here)
 
@@ -215,15 +313,20 @@ def _field(item: dict, *names, default=None):
     return default
 
 
-def recent_headlines(ticker: str, fetcher: Optional[HeadlineFetcher] = None,
-                     limit: int = 6) -> list[NewsHeadline]:
-    """Recent headlines + a light sentiment read. Never raises — returns [] if news is unavailable."""
+def recent_headlines(ticker: str, fetcher: Optional[HeadlineFetcher] = None, limit: int = 6,
+                     scorer: Optional[SentimentScorer] = None) -> list[NewsHeadline]:
+    """Recent headlines + a sentiment read. Never raises — returns [] if news is unavailable.
+
+    ``scorer`` defaults to the lexicon offline and the LLM scorer when ``ANTHROPIC_API_KEY`` is set
+    (see ``default_sentiment_scorer``); titles are scored in one batched call.
+    """
     fetcher = fetcher or YFinanceHeadlineFetcher()
+    scorer = scorer or default_sentiment_scorer()
     try:
         raw = fetcher.fetch(ticker, limit)
     except Exception:
         return []
-    out: list[NewsHeadline] = []
+    parsed = []                       # (title, publisher, url, when) before scoring
     for item in raw or []:
         if not isinstance(item, dict):
             continue
@@ -237,6 +340,11 @@ def recent_headlines(ticker: str, fetcher: Optional[HeadlineFetcher] = None,
         if isinstance(url, dict):
             url = url.get("url")
         when = _field(item, "providerPublishTime", "pubDate", "displayTime")
-        out.append(NewsHeadline(title=str(title), publisher=str(pub), when=str(when) if when else None,
-                                url=url if isinstance(url, str) else None, sentiment=score_sentiment(title)))
-    return out
+        parsed.append((str(title), str(pub), url if isinstance(url, str) else None,
+                       str(when) if when else None))
+    try:
+        scores = scorer.score_many([p[0] for p in parsed])
+    except Exception:
+        scores = [score_sentiment(p[0]) for p in parsed]    # belt-and-suspenders offline fallback
+    return [NewsHeadline(title=t, publisher=pub, when=when, url=url, sentiment=s)
+            for (t, pub, url, when), s in zip(parsed, scores)]

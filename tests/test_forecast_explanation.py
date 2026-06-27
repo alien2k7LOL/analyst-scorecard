@@ -6,8 +6,11 @@ import pytest
 
 from analyst_scorecard.forecast.explanation import (
     HeadlineFetcher,
+    LLMSentimentScorer,
+    LexiconSentimentScorer,
     build_math,
     classify_support,
+    default_sentiment_scorer,
     formula_text,
     news_lean,
     recent_headlines,
@@ -134,6 +137,71 @@ def test_proof_chart_renders_for_both_kinds():
         fig = plot_forecast_proof(_grade(kind=kind, band_pct=band), dark=True)
         assert fig is not None
         assert len(fig.axes) == 2
+
+
+class _FakeParse:
+    """Mimics the anthropic client.messages.parse(...) -> resp.parsed_output shape."""
+    def __init__(self, scores=None, raise_exc=None):
+        self._scores = scores
+        self._raise = raise_exc
+
+    class _Resp:
+        def __init__(self, parsed):
+            self.parsed_output = parsed
+
+    @property
+    def messages(self):
+        return self
+
+    def parse(self, *, output_format, **kw):
+        if self._raise:
+            raise self._raise
+        return self._Resp(output_format(scores=self._scores))
+
+
+def test_lexicon_scorer_matches_score_sentiment():
+    sc = LexiconSentimentScorer()
+    texts = ["Apple beats and surges", "Apple downgraded on weak demand", "Board meets Thursday"]
+    assert sc.score_many(texts) == [score_sentiment(t) for t in texts]
+    assert sc.score(texts[0]) == score_sentiment(texts[0])
+
+
+def test_default_scorer_is_lexicon_without_key(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert isinstance(default_sentiment_scorer(), LexiconSentimentScorer)
+
+
+def test_llm_scorer_needs_key_or_client(monkeypatch):
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    with pytest.raises(RuntimeError):
+        LLMSentimentScorer()
+
+
+def test_llm_scorer_uses_batched_output_and_clamps():
+    # an injected fake client returns out-of-range scores → must clamp to [-1, 1]
+    fake = _FakeParse(scores=[0.9, -2.0, 1.7])
+    sc = LLMSentimentScorer(client=fake)
+    assert sc.score_many(["a", "b", "c"]) == [0.9, -1.0, 1.0]
+    assert sc.score_many([]) == []
+
+
+def test_llm_scorer_falls_back_to_lexicon_on_any_failure():
+    # client error OR a length-mismatched reply both degrade to the deterministic lexicon
+    texts = ["Apple beats and surges", "Stock tumbles on downgrade"]
+    lex = [score_sentiment(t) for t in texts]
+    assert LLMSentimentScorer(client=_FakeParse(raise_exc=RuntimeError("network"))).score_many(texts) == lex
+    assert LLMSentimentScorer(client=_FakeParse(scores=[0.1])).score_many(texts) == lex  # wrong length
+
+
+def test_recent_headlines_uses_injected_scorer():
+    class _Heads(HeadlineFetcher):
+        def fetch(self, ticker, limit=6):
+            return [{"title": "anything at all", "link": "http://x/1"}]
+
+    # a scorer that always returns +0.9 must override the lexicon's read of the title
+    sc = LLMSentimentScorer(client=_FakeParse(scores=[0.9]))
+    out = recent_headlines("AAA", fetcher=_Heads(), scorer=sc)
+    assert len(out) == 1 and out[0].sentiment == 0.9
 
 
 def test_proof_chart_headline_number_is_calibrated_not_raw():

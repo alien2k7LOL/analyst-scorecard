@@ -34,8 +34,10 @@ python -m analyst_scorecard.synth        # (re)generate the synthetic call fixtu
 python -m analyst_scorecard.viz          # save the leaderboard + profile charts as PNGs
 ```
 
-Optional, for the LLM-backed paths: `export ANTHROPIC_API_KEY=...` (the call extractor and the
-verdict writer will then use `claude-opus-4-8`; without it they fall back to deterministic code).
+Optional, for the LLM-backed paths: `export ANTHROPIC_API_KEY=...` — the call extractor and the
+verdict writer then use `claude-opus-4-8`, and the news-sentiment read upgrades from the offline
+word-list to a Claude scorer (`claude-haiku-4-5`) that catches negation, relief idioms, and sarcasm.
+Without a key, every path falls back to deterministic offline code.
 
 Example leaderboard (default seed):
 

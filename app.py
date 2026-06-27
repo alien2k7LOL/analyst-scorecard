@@ -304,7 +304,9 @@ def _render_forecast_result(g, headlines=None):
                     st.markdown(f"{tag} **{h.title}**" + (f"  ·  {h.publisher}" if h.publisher else ""))
             else:
                 st.caption("No recent headlines available (offline, or none for this ticker).")
-        st.caption("Context only — not fed into the probability (that would risk look-ahead).")
+        _ai = bool(os.environ.get("ANTHROPIC_API_KEY"))
+        st.caption(("🤖 AI sentiment read" if _ai else "📋 Rules-based sentiment read")
+                   + " · context only — not fed into the probability (that would risk look-ahead).")
     st.markdown("**The picture** — the price cone and where the probability comes from")
     _fig = plot_forecast_proof(g, dark=True)
     st.pyplot(_fig)
