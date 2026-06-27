@@ -1,5 +1,8 @@
 # Analyst Scorecard
 
+[![CI](https://github.com/alien2k7LOL/analyst-scorecard/actions/workflows/ci.yml/badge.svg)](https://github.com/alien2k7LOL/analyst-scorecard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 > Honest, fair, reproducible grading of Wall Street analyst price targets.
 
 Track analyst price-target calls, wait for each target's deadline, compare the call to what
