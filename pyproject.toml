@@ -8,8 +8,10 @@ version = "0.1.0"
 description = "Honest, fair, reproducible grading of Wall Street analyst price targets."
 requires-python = ">=3.11"
 
-[tool.setuptools]
-packages = ["analyst_scorecard", "analyst_scorecard.providers"]
+# Auto-discover every subpackage (forecast, ingest, intel, providers, …) so `pip install .` ships a
+# complete package — a hand-maintained list silently dropped 4 of 6 subpackages.
+[tool.setuptools.packages.find]
+include = ["analyst_scorecard*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

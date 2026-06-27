@@ -39,8 +39,9 @@ def test_lexicon_baseline_is_locked_and_never_flips_sign():
     # Baseline LOCKED at ~74% on this specific gold set (37/50). A tight band rather than ">="
     # so an accidental change to the lexicon or the gold set — up OR down — trips the test.
     assert abs(accuracy(rows) - 0.74) <= 0.02
-    # ...and critically, it never actively reverses a sign (bull<->bear) — its errors are all
-    # "fell back to neutral", which is the safe failure mode for a trader-facing read.
+    # On THIS gold set the lexicon never reverses a sign (bull<->bear) — every error is "fell back to
+    # neutral". NB this is a property of how the set is curated (opposing keywords cancel), not a
+    # general safety guarantee: a genuinely adversarial mixed headline could still flip the lexicon.
     assert sign_error_rate(rows) == 0.0
 
 

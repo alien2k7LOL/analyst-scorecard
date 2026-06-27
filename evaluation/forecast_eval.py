@@ -98,6 +98,15 @@ def main() -> int:
     base = float(y.mean())
     out = []
     out.append(f"# Forecast evaluation — held-out test span (n={len(y)}), deployed = {result.selected_name}\n")
+    out.append("> **Read this first — what the numbers are measured on.** This eval runs on the bundled "
+               "`data/sample_historical` set, whose prices are **synthetic geometric Brownian motion** — "
+               "the *same* process the closed-form model assumes. So these are an **in-distribution upper "
+               "bound** (no fat tails, vol clustering, or regime shifts, which is exactly what degrades "
+               "calibration on real markets). The sample's news sentiment is also **engineered to lean "
+               "toward each stock's next move**, so the 'news helps' result and the `full+` model "
+               "selection are a *plumbing demonstration*, not evidence news helps on real data. Treat the "
+               "price-only metrics as the conservative read, and re-run on a real `prices.csv` before "
+               "quoting these to anyone.\n")
     out.append("## Primary metrics for a PROBABILITY model (the right tool)\n```")
     m = result.selected_metrics
     out.append(f"  calibration ECE : {m['ece']:.3f}   (does 70% mean 70%? lower is better)")

@@ -8,6 +8,9 @@ full traceability from score back to the exact prices used.
 
 ## Architecture / module map
 
+> Scope: this map covers the **v1 synthetic-grading engine**. The later subsystems — `forecast/`,
+> `intel/`, `ingest/`, and the `evaluation/` harnesses — are mapped in the [README](README.md).
+
 ```
 analyst_scorecard/
   config.py                 # single source of truth for ALL params (seed, horizon, benchmark,

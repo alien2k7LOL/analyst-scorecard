@@ -150,6 +150,14 @@ def write_report(path: Path = REPORT_PATH, results: Optional[dict] = None) -> Pa
         parts += ["", f"**LLM − lexicon accuracy delta: {d:+.1%}**"]
     else:
         parts += ["", "_LLM column skipped — set `ANTHROPIC_API_KEY` to score the LLM scorer too._"]
+    parts += ["", "---", "",
+              "**How to read this honestly.** The `sarcasm` row scores high for the lexicon by "
+              "*accident*, not skill: those headlines also contain a literal negative word "
+              "(*losses/cut/warns*) that drives the sign — the lexicon does no sarcasm parsing. The "
+              "real lexicon vs. LLM gap shows in `mixed` and `subtle`. And the **0% bull↔bear flip "
+              "rate is a property of this gold set** (opposing keywords cancel to neutral), not a "
+              "general safety guarantee of the scorer — a genuinely adversarial mixed headline can "
+              "still flip it."]
     path.write_text("\n".join(parts) + "\n")
     return path
 

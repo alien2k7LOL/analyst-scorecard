@@ -245,20 +245,26 @@ class LLMSentimentScorer(SentimentScorer):
             return self._fallback.score_many(texts)   # never break a context-only panel
 
     def _llm_scores(self, texts: list[str]) -> list[float]:
-        from pydantic import BaseModel, Field
+        # Use messages.create (present in every SDK version) and ask for a bare JSON array, rather
+        # than the newer messages.parse helper that the pinned anthropic SDK doesn't ship. Any shape
+        # mismatch raises and score_many() falls back to the lexicon.
+        import json
 
-        class _Scores(BaseModel):
-            scores: list[float] = Field(description="one sentiment score in [-1,1] per headline, in order")
-
-        numbered = "\n".join(f"{i+1}. {t}" for i, t in enumerate(texts))
-        resp = self._client.messages.parse(
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+        instr = (f"Score these {len(texts)} headlines. Reply with ONLY a JSON array of "
+                 f"{len(texts)} numbers in [-1,1], in order, no prose:\n{numbered}")
+        resp = self._client.messages.create(
             model=self._model, max_tokens=self._max_tokens, system=_LLM_SENTIMENT_SYSTEM,
-            messages=[{"role": "user", "content": numbered}], output_format=_Scores,
+            messages=[{"role": "user", "content": instr}],
         )
-        parsed = resp.parsed_output
-        if parsed is None or len(parsed.scores) != len(texts):
-            raise RuntimeError("sentiment LLM returned no/again-shaped output")
-        return [max(-1.0, min(1.0, float(s))) for s in parsed.scores]   # clamp to the contract
+        raw = "".join(getattr(b, "text", "") for b in resp.content if getattr(b, "type", "") == "text")
+        start, end = raw.find("["), raw.rfind("]")
+        if start < 0 or end <= start:
+            raise RuntimeError("sentiment LLM returned no JSON array")
+        scores = json.loads(raw[start:end + 1])
+        if not isinstance(scores, list) or len(scores) != len(texts):
+            raise RuntimeError("sentiment LLM returned a wrong-shaped array")
+        return [max(-1.0, min(1.0, float(s))) for s in scores]   # clamp to the contract
 
 
 def default_sentiment_scorer() -> SentimentScorer:

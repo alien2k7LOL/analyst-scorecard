@@ -140,23 +140,31 @@ def test_proof_chart_renders_for_both_kinds():
 
 
 class _FakeParse:
-    """Mimics the anthropic client.messages.parse(...) -> resp.parsed_output shape."""
-    def __init__(self, scores=None, raise_exc=None):
+    """Mimics anthropic client.messages.create(...) -> resp.content[0].text (a JSON array string)."""
+    def __init__(self, scores=None, raise_exc=None, raw=None):
         self._scores = scores
         self._raise = raise_exc
+        self._raw = raw                       # override the returned text (to test bad payloads)
+
+    class _Block:
+        type = "text"
+        def __init__(self, text):
+            self.text = text
 
     class _Resp:
-        def __init__(self, parsed):
-            self.parsed_output = parsed
+        def __init__(self, content):
+            self.content = content
 
     @property
     def messages(self):
         return self
 
-    def parse(self, *, output_format, **kw):
+    def create(self, **kw):
         if self._raise:
             raise self._raise
-        return self._Resp(output_format(scores=self._scores))
+        import json
+        text = self._raw if self._raw is not None else json.dumps(self._scores)
+        return self._Resp([self._Block(text)])
 
 
 def test_lexicon_scorer_matches_score_sentiment():
@@ -186,11 +194,12 @@ def test_llm_scorer_uses_batched_output_and_clamps():
 
 
 def test_llm_scorer_falls_back_to_lexicon_on_any_failure():
-    # client error OR a length-mismatched reply both degrade to the deterministic lexicon
+    # client error, a length-mismatched reply, OR non-JSON prose all degrade to the lexicon
     texts = ["Apple beats and surges", "Stock tumbles on downgrade"]
     lex = [score_sentiment(t) for t in texts]
     assert LLMSentimentScorer(client=_FakeParse(raise_exc=RuntimeError("network"))).score_many(texts) == lex
     assert LLMSentimentScorer(client=_FakeParse(scores=[0.1])).score_many(texts) == lex  # wrong length
+    assert LLMSentimentScorer(client=_FakeParse(raw="I cannot score these")).score_many(texts) == lex  # no array
 
 
 def test_recent_headlines_uses_injected_scorer():

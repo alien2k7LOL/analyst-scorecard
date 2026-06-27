@@ -110,13 +110,19 @@ class LLMVerdictGenerator(VerdictGenerator):
         self._max_tokens = max_tokens
 
     def verdict(self, score: AnalystScore) -> str:
-        response = self._client.messages.create(
-            model=self._model,
-            max_tokens=self._max_tokens,
-            system=_SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": _stats_blurb(score)}],
-        )
-        text = "".join(b.text for b in response.content if b.type == "text").strip()
+        # The key existing in the env doesn't mean it's valid — an invalid/expired/over-quota key
+        # raises only HERE, on the network call. Degrade to the deterministic verdict rather than
+        # let a 401/429 crash the whole page (the README promises an offline fallback "always").
+        try:
+            response = self._client.messages.create(
+                model=self._model,
+                max_tokens=self._max_tokens,
+                system=_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": _stats_blurb(score)}],
+            )
+            text = "".join(b.text for b in response.content if b.type == "text").strip()
+        except Exception:
+            text = ""
         return text or TemplatedVerdictGenerator().verdict(score)
 
 

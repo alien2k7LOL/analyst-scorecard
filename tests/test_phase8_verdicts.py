@@ -66,6 +66,25 @@ def test_llm_verdict_requires_key(monkeypatch):
         LLMVerdictGenerator()
 
 
+def test_llm_verdict_degrades_instead_of_crashing_on_api_error(scores_by_id):
+    # A present-but-invalid key only fails on the network call (401/429/etc.). verdict() must fall
+    # back to the templated text, not propagate — otherwise it crashes the whole Streamlit page.
+    gen = LLMVerdictGenerator.__new__(LLMVerdictGenerator)   # bypass the key check
+    gen._model, gen._max_tokens = "x", 10
+
+    class _Boom:
+        @property
+        def messages(self):
+            return self
+        def create(self, **kw):
+            raise RuntimeError("401 invalid x-api-key")
+
+    gen._client = _Boom()
+    score = next(iter(scores_by_id.values()))
+    v = gen.verdict(score)
+    assert v == TemplatedVerdictGenerator().verdict(score)   # graceful, deterministic fallback
+
+
 @pytest.mark.skipif(
     not os.environ.get("ANTHROPIC_API_KEY"),
     reason="no ANTHROPIC_API_KEY; offline verdicts validated via TemplatedVerdictGenerator",

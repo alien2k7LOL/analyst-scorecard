@@ -19,23 +19,26 @@ index?**
 
 **Why it's credible — held-out numbers, not vibes** (regenerate with the CLIs below):
 
-| What | Metric | On |
-|---|---|---|
-| Probability **calibration** | **ECE 0.023** (when it says 70%, it happens ~70%) | 3,712 blind test predictions |
-| Probability **discrimination** | **AUC 0.82**, Brier-skill **+0.31** vs base rate | same held-out split |
-| Analyst-call **extraction** | **95% rating accuracy** | 64-example hard gold set |
-| News **sentiment** sign | **74%** offline / LLM-upgradable, **0% sign flips** | 50-headline hard gold set |
-| **Tests** | **232 passing**, CI green on Py 3.11 + 3.12 | every push |
+| What | Metric | On | Reproduce |
+|---|---|---|---|
+| Probability **calibration** | **ECE 0.023** (when it says 70%, it happens ~70%) | 3,712 blind test predictions | `python -m analyst_scorecard.forecast.cli` |
+| Probability **discrimination** | **AUC 0.82**, Brier-skill **+0.31** vs base rate | same held-out split | same command |
+| Analyst-call **extraction** | **95% rating accuracy** | 64-example hard gold set | `python -m evaluation.extraction_eval` |
+| News **sentiment** sign | **74%** offline / LLM-upgradable, **0% bull↔bear flips** | 50-headline hard gold set | `python -m evaluation.sentiment_eval` |
+| **Tests** | **232 passing** (~50s, offline), CI green on Py 3.11 + 3.12 | every push | `pytest` |
 
 The discipline is the product: **look-ahead-safe** (every feature uses only data on/before the call
 date), **self-calibrating** per stock, and **offline-first** — it builds and runs with **no network
 and no API key**. The Anthropic API is optional (call extraction, verdicts, sentiment) and always
 sits behind a deterministic offline fallback.
 
-> **Status (honest).** The engine, the fairness contract, and the evaluation harnesses are complete
-> and CI-tested. Today they run on a **synthetic + sample** dataset; the bundled ingestion layer
-> (`yfinance` ratings + RSS) is the on-ramp to real analyst calls, which is the next milestone. The
-> calibration numbers above are real and held-out — on that synthetic-but-realistic data.
+> **Status (honest) — read before trusting the numbers.** The engine, the fairness contract, and the
+> evaluation harnesses are complete and CI-tested. But today they run on a **synthetic** dataset whose
+> prices are geometric Brownian motion — *the same process the model assumes* — so the calibration/AUC
+> above are a real, held-out, but **in-distribution upper bound**, not a real-market result. (The
+> smaller bundled sample in `evaluation/forecast_eval` is more conservative at AUC ~0.65, and its news
+> signal is deliberately engineered, so treat "news helps" there as plumbing, not proof.) The bundled
+> ingestion layer (`yfinance` ratings + RSS) is the on-ramp to real analyst calls — **milestone #1**.
 
 ---
 
@@ -102,10 +105,15 @@ analyst_scorecard/
   viz.py               Headless matplotlib charts + dataframes + PNG export.
   cli.py               `python -m analyst_scorecard.cli` — runs the simulation, prints the leaderboard.
   synth.py             Generates the synthetic ground-truth dataset (8 analysts) -> fixtures/calls.json.
+  forecast/            Calibrated price-target probabilities: closed-form GBM model (probability.py),
+                       look-ahead-safe features, self-calibrating backtest, live grader, proof/news.
+  intel/               Paste-a-recommendation pipeline: extract a call + assemble the analyst report.
+  ingest/              yfinance ratings + RSS -> deduped analyst_calls.jsonl (the real-data on-ramp).
 fixtures/
   calls.json           108 synthetic calls across 8 known-skill analysts.
   research_notes/notes.json   5 messy research notes + ground-truth extractions (extractor harness).
-tests/                 pytest, one module per phase (79 tests).
+evaluation/            Audit harnesses: extraction, forecast-calibration, and news-sentiment metrics.
+tests/                 pytest, one module per phase (234 collected; 232 pass, 2 LLM tests skip offline).
 app.py                 Streamlit demo: leaderboard, per-analyst profile vs. index, call drill-down.
 outputs/               Saved PNG charts (git-ignored; regenerate deterministically).
 PLAN.md / PROGRESS.md  The phase plan and the running build log (every scoring assumption recorded).
@@ -199,7 +207,7 @@ near-random, overconfident-and-wrong, Hold specialist, short-seller, and a middl
 
 ## How to run
 
-**Tests** — `pytest` (79 tests, ~2s, fully offline; 2 LLM tests auto-skip without a key).
+**Tests** — `pytest` (234 collected, 232 pass in ~50s, fully offline; 2 LLM tests auto-skip without a key).
 
 **CLI simulation** — `python -m analyst_scorecard.cli` streams a verdict line for each call as its
 deadline arrives in synthetic time, then prints the leaderboard with plain-English verdicts.
@@ -373,8 +381,9 @@ How it works, on the same look-ahead-safe spine:
    touch, splits by time (train fully resolved *before* any test prediction), fits a logistic
    recalibration layer on train, and reports Brier / log-loss / ECE on held-out test for: `raw` →
    `recalibrated` → `+momentum` → `+news` → `full`. **News is credited only if it beats the
-   price-only model on data it never saw.** On the sample, recalibration cuts ECE from ~0.10 to
-   ~0.03 and point-in-time news lowers held-out log-loss further.
+   price-only model on data it never saw.** On the default touch backtest, calibration cuts held-out
+   ECE from ~0.047 (raw) to ~0.034 (recalibrated) and the full model reaches ~0.023, while
+   point-in-time news lowers held-out log-loss further.
 4. **Live grading** (`live.py`) — fetches real history via `yfinance` and **self-calibrates on the
    ticker's own past** before grading your prediction (price-only; see the news note below).
 

@@ -3,6 +3,12 @@
 Running log. Updated after every phase: what was built, test results, and every
 assumption/limitation introduced. Newest phase appended at the bottom.
 
+> **Note:** this log is a detailed record of the original v1 synthetic-grading engine, frozen at the
+> historical back-test (Phase F). The later subsystems — the **forecast & calibration** engine
+> (`analyst_scorecard/forecast/`), the **Live Grader**, the **paste-a-call intel** pipeline, the
+> **yfinance/RSS ingestion** layer, and the **news-sentiment scorer + evaluation harnesses** — are
+> documented in the [README](README.md) and traceable through `git log`, not re-narrated here.
+
 > **Scope reminder:** the single most important property is FAIR, CORRECT, REPRODUCIBLE
 > scoring. Every assumption that could affect a score is recorded here.
 
