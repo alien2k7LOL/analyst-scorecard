@@ -36,6 +36,7 @@ site/
 evaluation/figures/
 evaluation/REPORT.md
 evaluation/FORECAST_REPORT.md
+evaluation/SENTIMENT_REPORT.md
 
 # Ingested analyst-call dataset (regenerate with `python -m analyst_scorecard.ingest.pipeline`)
 data/analyst_calls.jsonl

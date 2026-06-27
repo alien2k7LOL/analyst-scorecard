@@ -63,3 +63,13 @@ def test_compare_returns_lexicon_without_a_key(monkeypatch):
     out = compare()
     assert "lexicon" in out and "llm" not in out      # offline → no LLM column, no network
     assert 0.0 <= out["lexicon"]["accuracy"] <= 1.0
+
+
+def test_write_report_emits_markdown(tmp_path, monkeypatch):
+    from evaluation.sentiment_eval import write_report
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    out = write_report(path=tmp_path / "SENTIMENT_REPORT.md")
+    text = out.read_text()
+    assert out.exists() and "News-sentiment scorer evaluation" in text
+    assert "Lexicon (offline word-list)" in text and "By category" in text
+    assert "LLM column skipped" in text               # no key → lexicon-only report, no network

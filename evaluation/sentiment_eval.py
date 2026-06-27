@@ -115,7 +115,47 @@ def _print_block(name: str, res: dict) -> None:
     print(res["confusion"].to_string())
 
 
+REPORT_PATH = Path(__file__).parent / "SENTIMENT_REPORT.md"
+
+
+def _md_block(name: str, res: dict) -> str:
+    lines = [f"### {name}", "",
+             f"- **Overall sign-accuracy:** {res['accuracy']:.1%} ({len(res['rows'])} headlines)",
+             f"- **Bull↔bear flip rate:** {res['sign_error_rate']:.1%} (the costly errors)", "",
+             "**By category:**", "", "| category | n | accuracy |", "|---|---|---|"]
+    bc = res["by_category"]
+    for cat, row in bc.iterrows():
+        lines.append(f"| {cat} | {int(row['n'])} | {row['accuracy']:.0%} |")
+    lines += ["", "**Confusion (rows = true, cols = predicted):**", "",
+              "| true ╲ pred | " + " | ".join(LABELS) + " |", "|---|" + "---|" * len(LABELS)]
+    cm = res["confusion"]
+    for t in LABELS:
+        lines.append(f"| {t} | " + " | ".join(str(int(cm.loc[t, p])) for p in LABELS) + " |")
+    return "\n".join(lines)
+
+
+def write_report(path: Path = REPORT_PATH, results: Optional[dict] = None) -> Path:
+    """Render the eval to a Markdown report (regenerable artifact, like REPORT.md/FORECAST_REPORT.md)."""
+    from analyst_scorecard.forecast.explanation import DEFAULT_SENTIMENT_MODEL
+
+    results = results or compare()
+    parts = ["# News-sentiment scorer evaluation", "",
+             "Sign-accuracy of the news-sentiment scorers on the hand-labelled hard gold set "
+             f"(`evaluation/sentiment_gold.py`, {len(GOLD)} headlines). Regenerate with "
+             "`python -m evaluation.sentiment_eval --report`.", "",
+             _md_block("Lexicon (offline word-list)", results["lexicon"])]
+    if "llm" in results:
+        parts += ["", _md_block(f"LLM ({DEFAULT_SENTIMENT_MODEL})", results["llm"])]
+        d = results["llm"]["accuracy"] - results["lexicon"]["accuracy"]
+        parts += ["", f"**LLM − lexicon accuracy delta: {d:+.1%}**"]
+    else:
+        parts += ["", "_LLM column skipped — set `ANTHROPIC_API_KEY` to score the LLM scorer too._"]
+    path.write_text("\n".join(parts) + "\n")
+    return path
+
+
 def main() -> int:
+    import sys
     from analyst_scorecard.forecast.explanation import DEFAULT_SENTIMENT_MODEL
 
     results = compare()
@@ -127,6 +167,8 @@ def main() -> int:
         print("Tip: set SCORECARD_SENTIMENT_MODEL=<id> (e.g. a Sonnet/Opus id) and re-run to compare.")
     else:
         print("\n(LLM column skipped — set ANTHROPIC_API_KEY to score the LLM scorer too.)")
+    if "--report" in sys.argv:
+        print(f"\nWrote {write_report(results=results)}")
     return 0
 
 
