@@ -34,10 +34,11 @@ def test_evaluate_scores_every_example():
     assert all(r.predicted in LABELS for r in rows)
 
 
-def test_lexicon_baseline_is_reasonable_and_never_flips_sign():
+def test_lexicon_baseline_is_locked_and_never_flips_sign():
     rows = evaluate(LexiconSentimentScorer())
-    # the lexicon clears a real bar on a deliberately hard set...
-    assert accuracy(rows) >= 0.65
+    # Baseline LOCKED at ~74% on this specific gold set (37/50). A tight band rather than ">="
+    # so an accidental change to the lexicon or the gold set — up OR down — trips the test.
+    assert abs(accuracy(rows) - 0.74) <= 0.02
     # ...and critically, it never actively reverses a sign (bull<->bear) — its errors are all
     # "fell back to neutral", which is the safe failure mode for a trader-facing read.
     assert sign_error_rate(rows) == 0.0
