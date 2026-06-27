@@ -17,6 +17,11 @@ offline fallbacks.
 
 ## Quick start
 
+**Easiest (macOS):** double-click `launch_scorecard.command` in Finder — it creates the virtualenv,
+installs dependencies on first run, starts the app, and opens it in your browser.
+
+**Manual (any platform):**
+
 ```bash
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
@@ -385,3 +390,13 @@ Honest caveats, surfaced in the UI:
 See [`PLAN.md`](PLAN.md) / [`BACKTEST_PLAN.md`](BACKTEST_PLAN.md) for the phase plans and
 [`PROGRESS.md`](PROGRESS.md) for the running build log and every scoring assumption recorded as it
 was made.
+
+---
+
+## License
+
+Released under the [MIT License](LICENSE) — free to use, modify, and distribute with attribution.
+
+> **Not financial advice.** This project grades and forecasts for research and educational purposes
+> only. Probabilities are model estimates, not guarantees; nothing here is a recommendation to buy
+> or sell any security.
