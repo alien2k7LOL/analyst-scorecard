@@ -116,12 +116,15 @@ def _print_block(name: str, res: dict) -> None:
 
 
 def main() -> int:
+    from analyst_scorecard.forecast.explanation import DEFAULT_SENTIMENT_MODEL
+
     results = compare()
     _print_block("LEXICON (offline word-list)", results["lexicon"])
     if "llm" in results:
-        _print_block("LLM (claude-haiku-4-5)", results["llm"])
+        _print_block(f"LLM ({DEFAULT_SENTIMENT_MODEL})", results["llm"])
         d = results["llm"]["accuracy"] - results["lexicon"]["accuracy"]
         print(f"\nLLM − lexicon accuracy delta: {d:+.1%}")
+        print("Tip: set SCORECARD_SENTIMENT_MODEL=<id> (e.g. a Sonnet/Opus id) and re-run to compare.")
     else:
         print("\n(LLM column skipped — set ANTHROPIC_API_KEY to score the LLM scorer too.)")
     return 0

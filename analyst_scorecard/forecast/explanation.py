@@ -16,6 +16,7 @@ testable offline; failures degrade to "no headlines", never to a crash.
 
 from __future__ import annotations
 
+import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
@@ -177,7 +178,11 @@ def score_sentiment(text: str) -> float:
 # probability), so the LLM's non-determinism is safe here.
 # --------------------------------------------------------------------------------------
 
-DEFAULT_SENTIMENT_MODEL = "claude-haiku-4-5-20251001"   # light classification → the fast model
+# Default to the fast model — sentiment-sign of a one-line headline is language understanding, not a
+# reasoning chain, so Haiku is the cost/latency sweet spot for a panel that runs on EVERY forecast.
+# Override with SCORECARD_SENTIMENT_MODEL (e.g. a Sonnet/Opus id) and re-run evaluation/sentiment_eval
+# to measure whether a bigger model actually earns its keep on the hard (sarcasm/mixed) cases.
+DEFAULT_SENTIMENT_MODEL = os.environ.get("SCORECARD_SENTIMENT_MODEL", "claude-haiku-4-5-20251001")
 
 
 class SentimentScorer(ABC):
@@ -221,7 +226,6 @@ class LLMSentimentScorer(SentimentScorer):
         self._model = model
         self._max_tokens = max_tokens
         if client is None:
-            import os
             if not os.environ.get("ANTHROPIC_API_KEY"):
                 raise RuntimeError(
                     "LLMSentimentScorer needs ANTHROPIC_API_KEY or an injected client; "
@@ -259,7 +263,6 @@ class LLMSentimentScorer(SentimentScorer):
 
 def default_sentiment_scorer() -> SentimentScorer:
     """LLM scorer when a key is present (auto-upgrade, lexicon fallback); lexicon otherwise."""
-    import os
     if os.environ.get("ANTHROPIC_API_KEY"):
         try:
             return LLMSentimentScorer()
