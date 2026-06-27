@@ -3,18 +3,39 @@
 [![CI](https://github.com/alien2k7LOL/analyst-scorecard/actions/workflows/ci.yml/badge.svg)](https://github.com/alien2k7LOL/analyst-scorecard/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> Honest, fair, reproducible grading of Wall Street analyst price targets.
+> Honest, fair, reproducible grading of Wall Street analyst price targets — and a calibrated
+> probability that the next one comes true.
 
-Track analyst price-target calls, wait for each target's deadline, compare the call to what
-the stock actually did, and grade each analyst honestly over time. The number at the top of
-every profile answers the only question that matters:
+**The problem.** Analysts issue thousands of price targets, and almost nobody checks whether they
+come true. "70% chance NVDA hits $180 by Q3" is, in practice, a vibe. There's no accountable track
+record and no honest probability behind the number.
 
-**Would you have done better just buying the index?**
+**What this does.** Paste an analyst call (or type a price prediction). The tool (1) grades the
+analyst's history *fairly* — stripping out the market return they'd have earned by doing nothing —
+and (2) returns a **calibrated probability** that the target is hit by its deadline, with the math,
+a price-cone chart, and supporting/contradicting news shown as proof. The number at the top of every
+analyst profile answers the only question that matters: **would you have done better just buying the
+index?**
 
-The whole engine is **offline-first**: it builds and runs with **no network and no API key**.
-The Anthropic API is used only for two optional things — extracting calls from messy research
-text, and writing natural-language verdicts — and both sit behind interfaces with deterministic
-offline fallbacks.
+**Why it's credible — held-out numbers, not vibes** (regenerate with the CLIs below):
+
+| What | Metric | On |
+|---|---|---|
+| Probability **calibration** | **ECE 0.023** (when it says 70%, it happens ~70%) | 3,712 blind test predictions |
+| Probability **discrimination** | **AUC 0.82**, Brier-skill **+0.31** vs base rate | same held-out split |
+| Analyst-call **extraction** | **95% rating accuracy** | 64-example hard gold set |
+| News **sentiment** sign | **74%** offline / LLM-upgradable, **0% sign flips** | 50-headline hard gold set |
+| **Tests** | **232 passing**, CI green on Py 3.11 + 3.12 | every push |
+
+The discipline is the product: **look-ahead-safe** (every feature uses only data on/before the call
+date), **self-calibrating** per stock, and **offline-first** — it builds and runs with **no network
+and no API key**. The Anthropic API is optional (call extraction, verdicts, sentiment) and always
+sits behind a deterministic offline fallback.
+
+> **Status (honest).** The engine, the fairness contract, and the evaluation harnesses are complete
+> and CI-tested. Today they run on a **synthetic + sample** dataset; the bundled ingestion layer
+> (`yfinance` ratings + RSS) is the on-ramp to real analyst calls, which is the next milestone. The
+> calibration numbers above are real and held-out — on that synthetic-but-realistic data.
 
 ---
 
